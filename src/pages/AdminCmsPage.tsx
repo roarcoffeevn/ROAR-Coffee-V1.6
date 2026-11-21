@@ -123,6 +123,8 @@ export const AdminCmsPage: React.FC = () => {
   const [mediaAssets, setMediaAssets] = useState<MediaAssetRecord[]>([]);
   const [orders, setOrders] = useState<any[]>([]);
   const [customers, setCustomers] = useState<any[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [customerFilter, setCustomerFilter] = useState<'all' | 'with_orders' | 'members' | 'b2b'>('all');
   const [loyaltySettings, setLoyaltySettings] = useState<any>(null);
   const [promotions, setPromotions] = useState<any[]>([]);
   const [inquiries, setInquiries] = useState<any[]>([]);
@@ -267,6 +269,33 @@ export const AdminCmsPage: React.FC = () => {
   useEffect(() => {
     loadAll();
   }, [isAdmin, user?.id, user?.adminRole, JSON.stringify(user?.adminPermissions || [])]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    const onRefreshSignal = () => {
+      loadAll();
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || e.key === 'roar_static_runtime_v1') {
+        loadAll();
+      }
+    };
+    window.addEventListener('focus', onRefreshSignal);
+    window.addEventListener('roar:runtime-updated', onRefreshSignal);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('focus', onRefreshSignal);
+      window.removeEventListener('roar:runtime-updated', onRefreshSignal);
+      window.removeEventListener('storage', onStorage);
+    };
+  }, [isAdmin, user?.id, user?.adminRole, JSON.stringify(user?.adminPermissions || [])]);
+
+  useEffect(() => {
+    if (!isAdmin) return;
+    if (section === 'customers' || section === 'orders' || section === 'overview') {
+      loadAll();
+    }
+  }, [section]);
 
   useEffect(() => {
     if (
@@ -1916,149 +1945,254 @@ export const AdminCmsPage: React.FC = () => {
 
               <AdminWalletPointsPanel onGoProducts={() => selectSection('products')} />
 
-              {/* Mobile Compact Customer Cards */}
-              <div className="md:hidden bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 text-xs">
-                {customers.map((c) => (
-                  <div key={c.id} className="p-3 space-y-2">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="min-w-0">
-                        <p className="font-bold text-slate-900 truncate">{c.full_name}</p>
-                        <p className="text-[11px] text-slate-500 truncate">
-                          {c.member_code} · {c.email}
-                        </p>
+              {/* Search, Filter & Refresh Customer List */}
+              {(() => {
+                const q = customerSearch.trim().toLowerCase();
+                const filteredCustomers = customers.filter((c) => {
+                  if (customerFilter === 'with_orders' && Number(c.orderCount || 0) <= 0) return false;
+                  if (customerFilter === 'members' && c.role === 'admin') return false;
+                  if (customerFilter === 'b2b' && c.role !== 'b2b_partner') return false;
+                  if (!q) return true;
+                  return (
+                    String(c.full_name || '').toLowerCase().includes(q) ||
+                    String(c.email || '').toLowerCase().includes(q) ||
+                    String(c.phone || '').toLowerCase().includes(q) ||
+                    String(c.member_code || '').toLowerCase().includes(q)
+                  );
+                });
+
+                return (
+                  <>
+                    <div className="bg-white p-3.5 rounded-xl border border-slate-200 flex flex-wrap items-center justify-between gap-2.5">
+                      <div className="relative flex-1 min-w-[220px]">
+                        <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                        <input
+                          value={customerSearch}
+                          onChange={(e) => setCustomerSearch(e.target.value)}
+                          placeholder={t('Tìm theo tên, email, SĐT, mã thành viên...', 'Search name, email, phone, member ID...')}
+                          className="w-full pl-8 pr-3 py-1.5 border border-slate-200 rounded-lg text-xs focus:outline-none focus:border-[#00552B]"
+                        />
                       </div>
-                      <div className="text-right shrink-0 font-mono tabular-nums">
-                        <span className="font-bold text-[#00552B] block">{Number(c.wallet_balance_vnd || 0).toLocaleString('vi-VN')} ₫</span>
-                        <span className="text-[11px] font-semibold text-amber-600 block">{c.points.available} pts</span>
-                        <span className="text-[10px] text-slate-500">{c.orderCount || 0} {t('đơn', 'ord')}</span>
-                      </div>
-                    </div>
-                    <div className="flex items-center justify-between gap-1.5 pt-1">
-                      <select
-                        value={c.tier}
-                        onChange={(e) => adjustCustomer(c.id, e.target.value, 0)}
-                        className="border border-slate-200 rounded px-2 py-1 bg-white text-[11px]"
-                      >
+                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
                         {[
-                          { val: 'ROAR Member', labelVi: 'Thành viên ROAR' },
-                          { val: 'ROAR Silver', labelVi: 'ROAR Bạc' },
-                          { val: 'ROAR Gold', labelVi: 'ROAR Vàng' },
-                          { val: 'ROAR Reserve', labelVi: 'ROAR Thượng Hạng' },
-                        ].map((tr) => (
-                          <option key={tr.val} value={tr.val}>
-                            {lang === 'en' ? tr.val : tr.labelVi}
-                          </option>
+                          { key: 'all', vi: `Tất cả (${customers.length})`, en: `All (${customers.length})` },
+                          {
+                            key: 'members',
+                            vi: `Khách hàng (${customers.filter((x) => x.role !== 'admin').length})`,
+                            en: `Customers (${customers.filter((x) => x.role !== 'admin').length})`,
+                          },
+                          {
+                            key: 'with_orders',
+                            vi: `Đã mua hàng (${customers.filter((x) => Number(x.orderCount || 0) > 0).length})`,
+                            en: `With Orders (${customers.filter((x) => Number(x.orderCount || 0) > 0).length})`,
+                          },
+                          {
+                            key: 'b2b',
+                            vi: `B2B (${customers.filter((x) => x.role === 'b2b_partner').length})`,
+                            en: `B2B (${customers.filter((x) => x.role === 'b2b_partner').length})`,
+                          },
+                        ].map((tab) => (
+                          <button
+                            key={tab.key}
+                            type="button"
+                            onClick={() => setCustomerFilter(tab.key as any)}
+                            className={`px-2.5 py-1.5 rounded-lg font-medium cursor-pointer transition-colors ${
+                              customerFilter === tab.key
+                                ? 'bg-[#00552B] text-white'
+                                : 'bg-slate-100 text-slate-700 hover:bg-slate-200'
+                            }`}
+                          >
+                            {t(tab.vi, tab.en)}
+                          </button>
                         ))}
-                      </select>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => adjustCustomer(c.id, c.tier, 50)}
-                          className="px-2 py-1 bg-slate-100 rounded font-mono text-[11px] cursor-pointer"
-                        >
-                          +50
-                        </button>
                         <button
                           type="button"
                           onClick={() => {
-                            setNotifyCategory('promo');
-                            setNotifyModalTarget({ id: c.id, name: c.full_name, email: c.email });
+                            loadAll();
+                            showToast(t('Đã cập nhật danh sách khách hàng mới nhất', 'Customer list refreshed'));
                           }}
-                          className="px-2.5 py-1 bg-[#00552B]/10 text-[#00552B] rounded font-semibold inline-flex items-center gap-1 text-[11px] cursor-pointer"
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 text-slate-700 hover:bg-slate-50 font-medium cursor-pointer"
                         >
-                          <Send className="w-3 h-3" />
-                          {t('Nhắn', 'Notify')}
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>{t('Làm mới', 'Refresh')}</span>
                         </button>
                       </div>
                     </div>
-                  </div>
-                ))}
-              </div>
 
-              <div className="hidden md:block bg-white rounded-xl border border-slate-200 overflow-x-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
-                    <tr>
-                      <th className="p-3 text-left">{t('Mã TV', 'Member ID')}</th>
-                      <th className="p-3 text-left">{t('Họ tên & Email', 'Customer')}</th>
-                      <th className="p-3 text-right">{t('Đơn hàng & Tổng chi', 'Orders & Spend')}</th>
-                      <th className="p-3 text-left">{t('Hạng thành viên', 'Tier')}</th>
-                      <th className="p-3 text-right">{t('Số dư Ví ROAR', 'ROAR Wallet')}</th>
-                      <th className="p-3 text-right">{t('Điểm khả dụng', 'Available Pts')}</th>
-                      <th className="p-3 text-right">{t('Thao tác & Thông báo', 'Actions & Notify')}</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {customers.map((c) => (
-                      <tr key={c.id} className="hover:bg-slate-50/70">
-                        <td className="p-3 font-mono font-semibold">{c.member_code}</td>
-                        <td className="p-3">
-                          <div className="flex items-center gap-2">
-                            <span className="font-semibold text-slate-900">{c.full_name}</span>
-                            {c.role === 'admin' && (
-                              <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-semibold">
-                                Admin
-                              </span>
-                            )}
+                    {/* Mobile Compact Customer Cards */}
+                    <div className="md:hidden bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 text-xs">
+                      {filteredCustomers.map((c) => (
+                        <div key={c.id} className="p-3 space-y-2">
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="min-w-0">
+                              <p className="font-bold text-slate-900 truncate">{c.full_name}</p>
+                              <p className="text-[11px] text-slate-500 truncate">
+                                {c.member_code} · {c.email}
+                              </p>
+                              {c.phone && <p className="text-[11px] text-slate-600 font-mono">{c.phone}</p>}
+                            </div>
+                            <div className="text-right shrink-0 font-mono tabular-nums">
+                              <span className="font-bold text-[#00552B] block">{Number(c.wallet_balance_vnd || 0).toLocaleString('vi-VN')} ₫</span>
+                              <span className="text-[11px] font-semibold text-amber-600 block">{c.points.available} pts</span>
+                              <span className="text-[10px] text-slate-500">{c.orderCount || 0} {t('đơn', 'ord')}</span>
+                            </div>
                           </div>
-                          <div className="text-slate-500">{c.email}</div>
-                        </td>
-                        <td className="p-3 text-right font-mono tabular-nums">
-                          <div className="font-semibold text-slate-800">{c.orderCount || 0} {t('đơn', 'orders')}</div>
-                          <div className="text-[11px] text-slate-500">{(c.totalSpent || 0).toLocaleString()} ₫</div>
-                        </td>
-                        <td className="p-3">
-                          <select
-                            value={c.tier}
-                            onChange={(e) => adjustCustomer(c.id, e.target.value, 0)}
-                            className="border border-slate-200 rounded px-2 py-1 bg-white"
-                          >
-                            {[
-                              { val: 'ROAR Member', labelVi: 'Thành viên ROAR' },
-                              { val: 'ROAR Silver', labelVi: 'ROAR Bạc' },
-                              { val: 'ROAR Gold', labelVi: 'ROAR Vàng' },
-                              { val: 'ROAR Reserve', labelVi: 'ROAR Thượng Hạng' },
-                            ].map((tr) => (
-                              <option key={tr.val} value={tr.val}>
-                                {lang === 'en' ? tr.val : tr.labelVi}
-                              </option>
-                            ))}
-                          </select>
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold text-[#00552B] tabular-nums whitespace-nowrap">
-                          {Number(c.wallet_balance_vnd || 0).toLocaleString('vi-VN')} ₫
-                        </td>
-                        <td className="p-3 text-right font-mono font-bold tabular-nums">{c.points.available}</td>
-                        <td className="p-3 text-right whitespace-nowrap space-x-1.5">
-                          <button
-                            type="button"
-                            onClick={() => adjustCustomer(c.id, c.tier, 50)}
-                            className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded font-mono cursor-pointer"
-                          >
-                            +50 {t('điểm', 'pts')}
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setNotifyCategory('promo');
-                              setNotifyModalTarget({ id: c.id, name: c.full_name, email: c.email });
-                            }}
-                            className="px-2.5 py-1 bg-[#00552B]/10 hover:bg-[#00552B] text-[#00552B] hover:text-white rounded font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors"
-                          >
-                            <Send className="w-3 h-3" />
-                            {t('Gửi thông báo', 'Notify')}
-                            {c.unreadNotifications > 0 && (
-                              <span className="ml-0.5 px-1 rounded-full bg-amber-500 text-white text-[9px] font-mono">
-                                {c.unreadNotifications}
-                              </span>
-                            )}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+                          <div className="flex items-center justify-between gap-1.5 pt-1">
+                            <select
+                              value={c.tier}
+                              onChange={(e) => adjustCustomer(c.id, e.target.value, 0)}
+                              className="border border-slate-200 rounded px-2 py-1 bg-white text-[11px]"
+                            >
+                              {[
+                                { val: 'ROAR Member', labelVi: 'Thành viên ROAR' },
+                                { val: 'ROAR Silver', labelVi: 'ROAR Bạc' },
+                                { val: 'ROAR Gold', labelVi: 'ROAR Vàng' },
+                                { val: 'ROAR Reserve', labelVi: 'ROAR Thượng Hạng' },
+                              ].map((tr) => (
+                                <option key={tr.val} value={tr.val}>
+                                  {lang === 'en' ? tr.val : tr.labelVi}
+                                </option>
+                              ))}
+                            </select>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() => adjustCustomer(c.id, c.tier, 50)}
+                                className="px-2 py-1 bg-slate-100 rounded font-mono text-[11px] cursor-pointer"
+                              >
+                                +50
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setNotifyCategory('promo');
+                                  setNotifyModalTarget({ id: c.id, name: c.full_name, email: c.email });
+                                }}
+                                className="px-2.5 py-1 bg-[#00552B]/10 text-[#00552B] rounded font-semibold inline-flex items-center gap-1 text-[11px] cursor-pointer"
+                              >
+                                <Send className="w-3 h-3" />
+                                {t('Nhắn', 'Notify')}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {filteredCustomers.length === 0 && (
+                        <div className="p-6 text-center text-slate-500">
+                          {t('Chưa có khách hàng phù hợp với bộ lọc.', 'No customers match the current filter.')}
+                        </div>
+                      )}
+                    </div>
+
+                    <div className="hidden md:block bg-white rounded-xl border border-slate-200 overflow-x-auto">
+                      <table className="w-full text-xs">
+                        <thead className="bg-slate-50 border-b border-slate-200 text-slate-600">
+                          <tr>
+                            <th className="p-3 text-left">{t('Mã TV', 'Member ID')}</th>
+                            <th className="p-3 text-left">{t('Họ tên, SĐT & Email', 'Customer')}</th>
+                            <th className="p-3 text-right">{t('Đơn hàng & Tổng chi', 'Orders & Spend')}</th>
+                            <th className="p-3 text-left">{t('Hạng thành viên', 'Tier')}</th>
+                            <th className="p-3 text-right">{t('Số dư Ví ROAR', 'ROAR Wallet')}</th>
+                            <th className="p-3 text-right">{t('Điểm khả dụng', 'Available Pts')}</th>
+                            <th className="p-3 text-right">{t('Thao tác & Thông báo', 'Actions & Notify')}</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100">
+                          {filteredCustomers.map((c) => (
+                            <tr key={c.id} className="hover:bg-slate-50/70">
+                              <td className="p-3">
+                                <span className="font-mono font-semibold block">{c.member_code}</span>
+                                {c.created_at && (
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {String(c.created_at).slice(0, 10)}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="p-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-slate-900">{c.full_name}</span>
+                                  {c.role === 'admin' && (
+                                    <span className="px-1.5 py-0.5 rounded bg-slate-200 text-slate-700 text-[10px] font-semibold">
+                                      Admin
+                                    </span>
+                                  )}
+                                  {c.role === 'b2b_partner' && (
+                                    <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-semibold">
+                                      B2B
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-slate-500">
+                                  {c.email}
+                                  {c.phone ? ` · ${c.phone}` : ''}
+                                </div>
+                              </td>
+                              <td className="p-3 text-right font-mono tabular-nums">
+                                <div className="font-semibold text-slate-800">{c.orderCount || 0} {t('đơn', 'orders')}</div>
+                                <div className="text-[11px] text-slate-500">{(c.totalSpent || 0).toLocaleString()} ₫</div>
+                              </td>
+                              <td className="p-3">
+                                <select
+                                  value={c.tier}
+                                  onChange={(e) => adjustCustomer(c.id, e.target.value, 0)}
+                                  className="border border-slate-200 rounded px-2 py-1 bg-white"
+                                >
+                                  {[
+                                    { val: 'ROAR Member', labelVi: 'Thành viên ROAR' },
+                                    { val: 'ROAR Silver', labelVi: 'ROAR Bạc' },
+                                    { val: 'ROAR Gold', labelVi: 'ROAR Vàng' },
+                                    { val: 'ROAR Reserve', labelVi: 'ROAR Thượng Hạng' },
+                                  ].map((tr) => (
+                                    <option key={tr.val} value={tr.val}>
+                                      {lang === 'en' ? tr.val : tr.labelVi}
+                                    </option>
+                                  ))}
+                                </select>
+                              </td>
+                              <td className="p-3 text-right font-mono font-bold text-[#00552B] tabular-nums whitespace-nowrap">
+                                {Number(c.wallet_balance_vnd || 0).toLocaleString('vi-VN')} ₫
+                              </td>
+                              <td className="p-3 text-right font-mono font-bold tabular-nums">{c.points.available}</td>
+                              <td className="p-3 text-right whitespace-nowrap space-x-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => adjustCustomer(c.id, c.tier, 50)}
+                                  className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded font-mono cursor-pointer"
+                                >
+                                  +50 {t('điểm', 'pts')}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setNotifyCategory('promo');
+                                    setNotifyModalTarget({ id: c.id, name: c.full_name, email: c.email });
+                                  }}
+                                  className="px-2.5 py-1 bg-[#00552B]/10 hover:bg-[#00552B] text-[#00552B] hover:text-white rounded font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors"
+                                >
+                                  <Send className="w-3 h-3" />
+                                  {t('Gửi thông báo', 'Notify')}
+                                  {c.unreadNotifications > 0 && (
+                                    <span className="ml-0.5 px-1 rounded-full bg-amber-500 text-white text-[9px] font-mono">
+                                      {c.unreadNotifications}
+                                    </span>
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          ))}
+                          {filteredCustomers.length === 0 && (
+                            <tr>
+                              <td colSpan={7} className="p-6 text-center text-slate-500">
+                                {t('Chưa có khách hàng phù hợp với bộ lọc.', 'No customers match the current filter.')}
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </>
+                );
+              })()}
             </div>
           )}
 

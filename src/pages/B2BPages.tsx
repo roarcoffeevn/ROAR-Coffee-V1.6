@@ -157,7 +157,7 @@ export const PartnersPage: React.FC = () => {
 
 export const OemExportPage: React.FC = () => {
   const { lang, t } = useI18n();
-  const { cmsPages, showToast } = useStore();
+  const { cmsPages, showToast, apiFetch } = useStore();
   const [companyName, setCompanyName] = useState('');
   const [contactName, setContactName] = useState('');
   const [email, setEmail] = useState('');
@@ -195,7 +195,7 @@ export const OemExportPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/b2b/inquiries', {
+    const res = await apiFetch('/api/b2b/inquiries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -304,7 +304,7 @@ export const OemExportPage: React.FC = () => {
 
 export const ContactPage: React.FC = () => {
   const { lang, t } = useI18n();
-  const { settings, cmsPages, showToast } = useStore();
+  const { settings, cmsPages, showToast, apiFetch } = useStore();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
@@ -318,7 +318,7 @@ export const ContactPage: React.FC = () => {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const res = await fetch('/api/b2b/inquiries', {
+    const res = await apiFetch('/api/b2b/inquiries', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

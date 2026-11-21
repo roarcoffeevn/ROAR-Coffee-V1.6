@@ -271,6 +271,25 @@ app.post('/api/auth/register', (req, res) => {
     );
 
   const userId = Number(result.lastInsertRowid);
+  const welcomePts = 50;
+  db.prepare(`
+    INSERT INTO points_ledger (user_id, entry_type, points, description_vi, description_en)
+    VALUES (?, 'earn_available', ?, ?, ?)
+  `).run(
+    userId,
+    welcomePts,
+    'Quà chào mừng thành viên mới đăng ký ROAR COFFEE®',
+    'Welcome bonus points on ROAR COFFEE® member registration'
+  );
+  createUserNotification(userId, {
+    titleVi: `Chào mừng ${String(fullName).trim()} gia nhập ROAR CLUB!`,
+    titleEn: `Welcome ${String(fullName).trim()} to ROAR CLUB!`,
+    messageVi: `Tài khoản thành viên ${memberCode} đã được ghi nhận vào hệ thống kèm ${welcomePts} điểm thưởng chào mừng.`,
+    messageEn: `Your member account (${memberCode}) is registered with ${welcomePts} welcome reward points.`,
+    category: 'loyalty',
+    linkUrl: '/account?tab=rewards',
+  });
+
   const token = signSessionToken({ userId, email: normalizedEmail, role });
   setSessionCookie(req, res, token);
 
@@ -286,6 +305,8 @@ app.post('/api/auth/register', (req, res) => {
       tier: 'ROAR Member',
       emailVerified: false,
       verificationTokenPreview: verificationToken,
+      points: { available: welcomePts, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
+      walletBalanceVnd: 0,
     },
   });
 });
@@ -1581,6 +1602,182 @@ app.post('/api/promotions/validate', (req: AuthedRequest, res) => {
   res.json({ valid: true, promo, discountAmount: discount });
 });
 
+// ---------- CUSTOMER AUTO-REGISTRATION HELPERS ----------
+function normalizeMemberPhoneKey(raw: string): string {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('84') && digits.length >= 10) return `0${digits.slice(2)}`;
+  return digits;
+}
+
+interface ResolvedOrderCustomer {
+  id: number;
+  email: string;
+  fullName: string;
+  phone: string;
+  memberCode: string;
+  tier: string;
+  isNewMember: boolean;
+  matchedExisting: boolean;
+  welcomePoints: number;
+}
+
+function resolveOrCreateOrderCustomer(params: {
+  authUser?: { userId: number; email: string; role: string } | null;
+  customerName: string;
+  customerEmail: string;
+  customerPhone: string;
+  sourceLabelVi?: string;
+  sourceLabelEn?: string;
+}): ResolvedOrderCustomer {
+  const cleanName = String(params.customerName || '').trim() || 'ROAR Customer';
+  const cleanEmail = String(params.customerEmail || '').trim().toLowerCase();
+  const cleanPhone = String(params.customerPhone || '').trim();
+  const phoneKey = normalizeMemberPhoneKey(cleanPhone);
+
+  let authUserRow: any = null;
+  if (params.authUser?.userId) {
+    authUserRow = db
+      .prepare('SELECT id, email, full_name, phone, role, member_code, tier FROM users WHERE id = ?')
+      .get(params.authUser.userId);
+  }
+
+  // Only bind directly to session user if non-admin OR email matches session user's email
+  const shouldUseSessionUser =
+    Boolean(authUserRow) &&
+    (authUserRow.role !== 'admin' || !cleanEmail || cleanEmail === String(authUserRow.email || '').toLowerCase());
+
+  if (shouldUseSessionUser && authUserRow) {
+    if (cleanPhone && !String(authUserRow.phone || '').trim()) {
+      db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(cleanPhone, authUserRow.id);
+    }
+    return {
+      id: Number(authUserRow.id),
+      email: authUserRow.email,
+      fullName: authUserRow.full_name || cleanName,
+      phone: cleanPhone || authUserRow.phone || '',
+      memberCode: authUserRow.member_code,
+      tier: authUserRow.tier,
+      isNewMember: false,
+      matchedExisting: true,
+      welcomePoints: 0,
+    };
+  }
+
+  let existingUser: any = null;
+  if (cleanEmail) {
+    existingUser = db
+      .prepare('SELECT id, email, full_name, phone, member_code, tier FROM users WHERE LOWER(TRIM(email)) = ?')
+      .get(cleanEmail);
+  }
+  if (!existingUser && phoneKey.length >= 8) {
+    const candidates = db
+      .prepare("SELECT id, email, full_name, phone, member_code, tier FROM users WHERE phone IS NOT NULL AND TRIM(phone) != ''")
+      .all() as any[];
+    existingUser = candidates.find((u) => normalizeMemberPhoneKey(u.phone) === phoneKey) || null;
+  }
+
+  if (existingUser) {
+    if (cleanPhone && !String(existingUser.phone || '').trim()) {
+      db.prepare('UPDATE users SET phone = ? WHERE id = ?').run(cleanPhone, existingUser.id);
+    }
+    if (cleanEmail) {
+      db.prepare('UPDATE orders SET user_id = ? WHERE user_id IS NULL AND LOWER(TRIM(customer_email)) = ?').run(
+        Number(existingUser.id),
+        cleanEmail
+      );
+    }
+    return {
+      id: Number(existingUser.id),
+      email: existingUser.email,
+      fullName: existingUser.full_name || cleanName,
+      phone: cleanPhone || existingUser.phone || '',
+      memberCode: existingUser.member_code,
+      tier: existingUser.tier,
+      isNewMember: false,
+      matchedExisting: true,
+      welcomePoints: 0,
+    };
+  }
+
+  let memberCode = `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`;
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const existsCode = db.prepare('SELECT id FROM users WHERE member_code = ?').get(memberCode);
+    if (!existsCode) break;
+    memberCode = `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`;
+  }
+
+  const memberEmail = cleanEmail || `${phoneKey || `guest${Date.now()}`}@member.roarcoffee.vn`;
+  const randomPasswordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
+  const ins = db
+    .prepare(`
+      INSERT INTO users (email, password_hash, full_name, phone, role, member_code, tier, email_verified)
+      VALUES (?, ?, ?, ?, 'customer', ?, 'ROAR Member', 0)
+    `)
+    .run(memberEmail, randomPasswordHash, cleanName, cleanPhone, memberCode);
+  const newUserId = Number(ins.lastInsertRowid);
+  const welcomePts = 50;
+
+  db.prepare(`
+    INSERT INTO points_ledger (user_id, entry_type, points, description_vi, description_en)
+    VALUES (?, 'earn_available', ?, ?, ?)
+  `).run(
+    newUserId,
+    welcomePts,
+    params.sourceLabelVi || 'Quà chào mừng thành viên mới ROAR CLUB khi đặt đơn hàng đầu tiên',
+    params.sourceLabelEn || 'ROAR CLUB welcome bonus points on first order'
+  );
+
+  createUserNotification(newUserId, {
+    titleVi: `Chào mừng ${cleanName} gia nhập ROAR CLUB!`,
+    titleEn: `Welcome ${cleanName} to ROAR CLUB!`,
+    messageVi: `Tài khoản thành viên ${memberCode} đã được khởi tạo tự động kèm ${welcomePts} điểm thưởng chào mừng.`,
+    messageEn: `Your ROAR Member account (${memberCode}) is now active with ${welcomePts} welcome points.`,
+    category: 'loyalty',
+    linkUrl: '/account?tab=rewards',
+  });
+
+  if (cleanEmail) {
+    db.prepare('UPDATE orders SET user_id = ? WHERE user_id IS NULL AND LOWER(TRIM(customer_email)) = ?').run(
+      newUserId,
+      cleanEmail
+    );
+  }
+
+  return {
+    id: newUserId,
+    email: memberEmail,
+    fullName: cleanName,
+    phone: cleanPhone,
+    memberCode,
+    tier: 'ROAR Member',
+    isNewMember: true,
+    matchedExisting: false,
+    welcomePoints: welcomePts,
+  };
+}
+
+function syncUnlinkedOrderCustomers(): void {
+  const unlinked = db
+    .prepare(
+      "SELECT id, customer_name, customer_email, customer_phone FROM orders WHERE user_id IS NULL ORDER BY id ASC"
+    )
+    .all() as Array<{ id: number; customer_name: string; customer_email: string; customer_phone: string }>;
+  if (unlinked.length === 0) return;
+  const tx = db.transaction(() => {
+    for (const o of unlinked) {
+      if (!String(o.customer_email || '').trim() && !String(o.customer_phone || '').trim()) continue;
+      const customer = resolveOrCreateOrderCustomer({
+        customerName: o.customer_name || 'ROAR Customer',
+        customerEmail: o.customer_email || '',
+        customerPhone: o.customer_phone || '',
+      });
+      db.prepare('UPDATE orders SET user_id = ? WHERE id = ? AND user_id IS NULL').run(customer.id, o.id);
+    }
+  });
+  tx();
+}
+
 // ---------- CHECKOUT & ORDERS ----------
 app.post('/api/orders', (req: AuthedRequest, res) => {
   const {
@@ -1602,6 +1799,14 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
   }
 
   const createOrderTx = db.transaction(() => {
+    const customerRecord = resolveOrCreateOrderCustomer({
+      authUser: req.authUser || null,
+      customerName: String(customerName).trim(),
+      customerEmail: String(customerEmail).trim().toLowerCase(),
+      customerPhone: String(customerPhone).trim(),
+    });
+    const effectiveUserId = customerRecord.id;
+
     let subtotal = 0;
     const resolvedItems: Array<{
       productId: number;
@@ -1716,14 +1921,12 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
     let initialPaymentStatus = 'awaiting_payment';
     if (paymentMethod === 'wallet') {
       if (!req.authUser) {
-        res.status(401).json({ error: 'Vui lòng đăng nhập để thanh toán bằng Ví Thành viên ROAR.' });
-        return;
+        throw new Error('Vui lòng đăng nhập để thanh toán bằng Ví Thành viên ROAR.');
       }
       const uWallet = db.prepare('SELECT wallet_balance_vnd FROM users WHERE id = ?').get(req.authUser.userId) as any;
       const currentBal = Number(uWallet?.wallet_balance_vnd || 0);
       if (currentBal < total) {
-        res.status(400).json({ error: `Số dư Ví ROAR (${currentBal.toLocaleString('vi-VN')}₫) không đủ để thanh toán đơn hàng ${total.toLocaleString('vi-VN')}₫.` });
-        return;
+        throw new Error(`Số dư Ví ROAR (${currentBal.toLocaleString('vi-VN')}₫) không đủ để thanh toán đơn hàng ${total.toLocaleString('vi-VN')}₫.`);
       }
       db.prepare('UPDATE users SET wallet_balance_vnd = wallet_balance_vnd - ? WHERE id = ?').run(total, req.authUser.userId);
       db.prepare(`
@@ -1738,18 +1941,14 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
       initialPaymentStatus = 'paid';
     } else if (paymentMethod === 'points') {
       if (!req.authUser) {
-        res.status(401).json({ error: 'Vui lòng đăng nhập để mua hàng bằng Điểm thưởng ROAR.' });
-        return;
+        throw new Error('Vui lòng đăng nhập để mua hàng bằng Điểm thưởng ROAR.');
       }
       const loyalty = db.prepare('SELECT * FROM loyalty_settings WHERE id = 1').get() as any;
       const vndPerPoint = Number(loyalty?.vnd_per_point || 100);
       const summary = getPointsSummary(req.authUser.userId);
       const pointsNeeded = Math.ceil(total / vndPerPoint);
       if (summary.available < pointsNeeded) {
-        res.status(400).json({
-          error: `Bạn cần ${pointsNeeded.toLocaleString('vi-VN')} điểm để thanh toán đơn này (hiện có ${summary.available.toLocaleString('vi-VN')} điểm).`,
-        });
-        return;
+        throw new Error(`Bạn cần ${pointsNeeded.toLocaleString('vi-VN')} điểm để thanh toán đơn này (hiện có ${summary.available.toLocaleString('vi-VN')} điểm).`);
       }
       pointsRedeemed += pointsNeeded;
       pointsDiscount += total;
@@ -1766,7 +1965,7 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
       `)
       .run(
         orderNumber,
-        req.authUser ? req.authUser.userId : null,
+        effectiveUserId,
         String(customerName).trim(),
         String(customerEmail).trim().toLowerCase(),
         String(customerPhone).trim(),
@@ -1814,64 +2013,92 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
       );
     }
 
-    if (req.authUser) {
-      const loyalty = db.prepare('SELECT * FROM loyalty_settings WHERE id = 1').get() as any;
-      const userRow = db.prepare('SELECT tier FROM users WHERE id = ?').get(req.authUser.userId) as { tier: string };
-      const tierRow = db.prepare('SELECT point_multiplier FROM membership_tiers WHERE name = ?').get(userRow?.tier || 'ROAR Member') as { point_multiplier: number } | undefined;
-      const mult = tierRow?.point_multiplier || 1.0;
-      const netEligible = Math.max(0, subtotal - discountAmount - pointsDiscount);
-      const pendingPoints = Math.floor((netEligible / 10000) * (loyalty?.points_per_10k_vnd || 1) * mult);
-      if (pendingPoints > 0) {
-        db.prepare(`
-          INSERT INTO points_ledger (user_id, order_id, entry_type, points, description_vi, description_en)
-          VALUES (?, ?, 'earn_pending', ?, ?, ?)
-        `).run(
-          req.authUser.userId,
-          orderId,
-          pendingPoints,
-          `Điểm chờ duyệt từ đơn hàng ${orderNumber} (Cộng chính thức khi hoàn tất)`,
-          `Pending points for order ${orderNumber} (Credited upon completion)`
-        );
-      }
-
-      createUserNotification(req.authUser.userId, {
-        titleVi: `Đã tiếp nhận đơn hàng ${orderNumber}`,
-        titleEn: `Order ${orderNumber} received`,
-        messageVi: `Đơn hàng trị giá ${total.toLocaleString('vi-VN')} ₫ đang chờ Quản trị viên ROAR xác nhận và chuẩn bị hàng.`,
-        messageEn: `Your order totaling ${total.toLocaleString('en-US')} VND is awaiting confirmation and preparation.`,
-        category: 'order',
-        linkUrl: '/account?tab=orders',
-      });
+    const loyalty = db.prepare('SELECT * FROM loyalty_settings WHERE id = 1').get() as any;
+    const tierRow = db.prepare('SELECT point_multiplier FROM membership_tiers WHERE name = ?').get(customerRecord.tier || 'ROAR Member') as { point_multiplier: number } | undefined;
+    const mult = tierRow?.point_multiplier || 1.0;
+    const netEligible = Math.max(0, subtotal - discountAmount - pointsDiscount);
+    const pendingPoints = Math.floor((netEligible / 10000) * (loyalty?.points_per_10k_vnd || 1) * mult);
+    if (pendingPoints > 0) {
+      db.prepare(`
+        INSERT INTO points_ledger (user_id, order_id, entry_type, points, description_vi, description_en)
+        VALUES (?, ?, 'earn_pending', ?, ?, ?)
+      `).run(
+        effectiveUserId,
+        orderId,
+        pendingPoints,
+        `Điểm chờ duyệt từ đơn hàng ${orderNumber} (Cộng chính thức khi hoàn tất)`,
+        `Pending points for order ${orderNumber} (Credited upon completion)`
+      );
     }
 
+    createUserNotification(effectiveUserId, {
+      titleVi: `Đã tiếp nhận đơn hàng ${orderNumber}`,
+      titleEn: `Order ${orderNumber} received`,
+      messageVi: `Đơn hàng trị giá ${total.toLocaleString('vi-VN')} ₫ đang chờ Quản trị viên ROAR xác nhận và chuẩn bị hàng.`,
+      messageEn: `Your order totaling ${total.toLocaleString('en-US')} VND is awaiting confirmation and preparation.`,
+      category: 'order',
+      linkUrl: '/account?tab=orders',
+    });
+
     return {
-      orderId,
-      orderNumber,
-      total,
-      subtotal,
-      discountAmount,
-      pointsDiscount,
-      shippingFee,
-      paymentMethod: String(paymentMethod || 'cod'),
-      customerEmail: String(customerEmail).trim().toLowerCase(),
+      order: {
+        orderId,
+        orderNumber,
+        total,
+        subtotal,
+        discountAmount,
+        pointsDiscount,
+        shippingFee,
+        paymentMethod: String(paymentMethod || 'cod'),
+        customerEmail: String(customerEmail).trim().toLowerCase(),
+      },
+      membership: {
+        isNewMember: customerRecord.isNewMember,
+        matchedExisting: customerRecord.matchedExisting,
+        memberCode: customerRecord.memberCode,
+        tier: customerRecord.tier,
+        fullName: customerRecord.fullName,
+        welcomePoints: customerRecord.welcomePoints,
+      },
+      newCustomerRecord: customerRecord.isNewMember ? customerRecord : null,
     };
   });
 
   try {
     const created = createOrderTx();
-    res.status(201).json({ ok: true, order: created });
+    let authPayload: { token: string; user: any } | undefined;
+    if (!req.authUser && created.newCustomerRecord) {
+      const m = created.newCustomerRecord;
+      const token = signSessionToken({ userId: m.id, email: m.email, role: 'customer' });
+      setSessionCookie(req, res, token);
+      authPayload = {
+        token,
+        user: {
+          id: m.id,
+          email: m.email,
+          fullName: m.fullName,
+          phone: m.phone,
+          role: 'customer',
+          memberCode: m.memberCode,
+          tier: m.tier,
+          emailVerified: false,
+          points: { available: m.welcomePoints, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
+          walletBalanceVnd: 0,
+        },
+      };
+    }
+    res.status(201).json({
+      ok: true,
+      order: created.order,
+      membership: created.membership,
+      ...(authPayload ? { auth: authPayload } : {}),
+    });
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Unable to create order' });
   }
 });
 
 // ---------- GIFTPOP-STYLE GIFT VOUCHER CHECKOUT & DISPATCH ----------
-function normalizeMemberPhoneKey(raw: string): string {
-  const digits = String(raw || '').replace(/\D/g, '');
-  if (!digits) return '';
-  if (digits.startsWith('84') && digits.length >= 10) return `0${digits.slice(2)}`;
-  return digits;
-}
 
 app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
   const {
@@ -1953,107 +2180,26 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
   const finalMethod = allowedMethods.has(String(paymentMethod)) ? String(paymentMethod) : 'vietqr';
 
   const tx = db.transaction(() => {
-    // Check existing member by auth session, email, or normalized phone; auto-register if not a member yet
-    let effectiveUserId: number | null = authUserRow ? Number(authUserRow.id) : null;
-    let isNewMember = false;
-    let matchedExisting = Boolean(authUserRow);
-    let memberRecord: {
-      id: number;
-      email: string;
-      fullName: string;
-      phone: string;
-      memberCode: string;
-      tier: string;
-      welcomePoints: number;
-    } | null = authUserRow
-      ? {
-          id: Number(authUserRow.id),
-          email: authUserRow.email,
-          fullName: authUserRow.full_name,
-          phone: authUserRow.phone || '',
-          memberCode: authUserRow.member_code,
-          tier: authUserRow.tier,
-          welcomePoints: 0,
-        }
-      : null;
-
-    if (!effectiveUserId) {
-      let existingUser: any = null;
-      if (finalSenderEmail) {
-        existingUser = db
-          .prepare('SELECT id, email, full_name, phone, member_code, tier FROM users WHERE LOWER(TRIM(email)) = ?')
-          .get(finalSenderEmail);
-      }
-      if (!existingUser && senderPhoneKey.length >= 8) {
-        const candidates = db
-          .prepare("SELECT id, email, full_name, phone, member_code, tier FROM users WHERE phone IS NOT NULL AND TRIM(phone) != ''")
-          .all() as any[];
-        existingUser = candidates.find((u) => normalizeMemberPhoneKey(u.phone) === senderPhoneKey) || null;
-      }
-
-      if (existingUser) {
-        effectiveUserId = Number(existingUser.id);
-        matchedExisting = true;
-        memberRecord = {
-          id: Number(existingUser.id),
-          email: existingUser.email,
-          fullName: existingUser.full_name,
-          phone: existingUser.phone || '',
-          memberCode: existingUser.member_code,
-          tier: existingUser.tier,
-          welcomePoints: 0,
-        };
-      } else {
-        // Not a member yet -> automatically create a brand-new ROAR Member account
-        let memberCode = `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`;
-        for (let attempt = 0; attempt < 5; attempt++) {
-          const existsCode = db.prepare('SELECT id FROM users WHERE member_code = ?').get(memberCode);
-          if (!existsCode) break;
-          memberCode = `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`;
-        }
-        const memberEmail =
-          finalSenderEmail || `${senderPhoneKey || `guest${Date.now()}`}@member.roarcoffee.vn`;
-        const randomPasswordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
-        const newUserInsert = db
-          .prepare(`
-            INSERT INTO users (email, password_hash, full_name, phone, role, member_code, tier, email_verified)
-            VALUES (?, ?, ?, ?, 'customer', ?, 'ROAR Member', 0)
-          `)
-          .run(memberEmail, randomPasswordHash, finalSenderName, finalSenderPhone, memberCode);
-        effectiveUserId = Number(newUserInsert.lastInsertRowid);
-        isNewMember = true;
-
-        const welcomePts = 50;
-        db.prepare(`
-          INSERT INTO points_ledger (user_id, entry_type, points, description_vi, description_en)
-          VALUES (?, 'earn_available', ?, ?, ?)
-        `).run(
-          effectiveUserId,
-          welcomePts,
-          'Quà chào mừng thành viên mới ROAR CLUB khi đặt E-Voucher',
-          'ROAR CLUB welcome bonus points on first E-Voucher order'
-        );
-
-        createUserNotification(effectiveUserId, {
-          titleVi: `Chào mừng ${finalSenderName} gia nhập ROAR CLUB!`,
-          titleEn: `Welcome ${finalSenderName} to ROAR CLUB!`,
-          messageVi: `Tài khoản thành viên ${memberCode} đã được khởi tạo tự động kèm ${welcomePts} điểm thưởng chào mừng.`,
-          messageEn: `Your ROAR Member account (${memberCode}) is now active with ${welcomePts} welcome points.`,
-          category: 'loyalty',
-          linkUrl: '/account?tab=vouchers',
-        });
-
-        memberRecord = {
-          id: effectiveUserId,
-          email: memberEmail,
-          fullName: finalSenderName,
-          phone: finalSenderPhone,
-          memberCode,
-          tier: 'ROAR Member',
-          welcomePoints: welcomePts,
-        };
-      }
-    }
+    const resolvedCustomer = resolveOrCreateOrderCustomer({
+      authUser: req.authUser || null,
+      customerName: finalSenderName,
+      customerEmail: finalSenderEmail,
+      customerPhone: finalSenderPhone,
+      sourceLabelVi: 'Quà chào mừng thành viên mới ROAR CLUB khi đặt E-Voucher',
+      sourceLabelEn: 'ROAR CLUB welcome bonus points on first E-Voucher order',
+    });
+    const effectiveUserId = resolvedCustomer.id;
+    const isNewMember = resolvedCustomer.isNewMember;
+    const matchedExisting = resolvedCustomer.matchedExisting;
+    const memberRecord = {
+      id: resolvedCustomer.id,
+      email: resolvedCustomer.email,
+      fullName: resolvedCustomer.fullName,
+      phone: resolvedCustomer.phone,
+      memberCode: resolvedCustomer.memberCode,
+      tier: resolvedCustomer.tier,
+      welcomePoints: resolvedCustomer.welcomePoints,
+    };
 
     const unitPriceVnd = Number(product.price_vnd || 0);
     const qty = normalizedRecipients.length;
@@ -2308,7 +2454,7 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
   try {
     const result = tx();
     let authPayload: { token: string; user: any } | undefined;
-    if (result.newMemberRecord) {
+    if (!req.authUser && result.newMemberRecord) {
       const m = result.newMemberRecord;
       const token = signSessionToken({ userId: m.id, email: m.email, role: 'customer' });
       setSessionCookie(req, res, token);
@@ -3109,13 +3255,14 @@ app.patch('/api/admin/orders/:id', requirePermission('orders'), (req: AuthedRequ
 });
 
 app.get('/api/admin/customers', requirePermission('customers'), (_req, res) => {
+  syncUnlinkedOrderCustomers();
   const users = db
     .prepare('SELECT id, email, full_name, phone, role, member_code, tier, wallet_balance_vnd, email_verified, company_name, b2b_verified, deletion_requested, created_at FROM users ORDER BY id DESC')
     .all() as any[];
   const enriched = users.map((u) => {
     const orderStats = db
-      .prepare("SELECT COUNT(*) as c, COALESCE(SUM(total), 0) as spent FROM orders WHERE user_id = ? AND order_status != 'Cancelled'")
-      .get(u.id) as { c: number; spent: number };
+      .prepare("SELECT COUNT(*) as c, COALESCE(SUM(total), 0) as spent FROM orders WHERE (user_id = ? OR LOWER(TRIM(customer_email)) = LOWER(TRIM(?))) AND order_status != 'Cancelled'")
+      .get(u.id, u.email || '') as { c: number; spent: number };
     const unreadNotifications = (
       db.prepare('SELECT COUNT(*) as c FROM user_notifications WHERE user_id = ? AND is_read = 0').get(u.id) as { c: number }
     ).c;

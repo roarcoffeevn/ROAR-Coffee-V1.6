@@ -216,9 +216,94 @@ function readState(): StaticRuntimeState {
 function writeState(state: StaticRuntimeState): void {
   try {
     window.localStorage.setItem(STATIC_STATE_KEY, JSON.stringify(state));
+    window.dispatchEvent(new CustomEvent('roar:runtime-updated'));
   } catch {
     // ignore
   }
+}
+
+function normalizePhoneKey(raw: string): string {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('84') && digits.length >= 10) return `0${digits.slice(2)}`;
+  return digits;
+}
+
+function resolveOrCreateStaticCustomer(
+  state: StaticRuntimeState,
+  params: {
+    authUser?: StaticUserRecord | null;
+    customerName: string;
+    customerEmail: string;
+    customerPhone: string;
+  }
+): { user: StaticUserRecord; isNewMember: boolean; matchedExisting: boolean; welcomePoints: number } {
+  const cleanName = String(params.customerName || '').trim() || 'ROAR Customer';
+  const cleanEmail = String(params.customerEmail || '').trim().toLowerCase();
+  const cleanPhone = String(params.customerPhone || '').trim();
+  const phoneKey = normalizePhoneKey(cleanPhone);
+
+  const authU = params.authUser || null;
+  const shouldUseSessionUser =
+    Boolean(authU) && (authU!.role !== 'admin' || !cleanEmail || cleanEmail === authU!.email.toLowerCase());
+
+  if (shouldUseSessionUser && authU) {
+    if (cleanPhone && !String(authU.phone || '').trim()) {
+      authU.phone = cleanPhone;
+    }
+    return { user: authU, isNewMember: false, matchedExisting: true, welcomePoints: 0 };
+  }
+
+  let existing =
+    (cleanEmail ? state.users.find((x) => x.email.toLowerCase() === cleanEmail) : undefined) ||
+    (phoneKey.length >= 8 ? state.users.find((x) => normalizePhoneKey(x.phone) === phoneKey) : undefined) ||
+    null;
+
+  if (existing) {
+    if (cleanPhone && !String(existing.phone || '').trim()) {
+      existing.phone = cleanPhone;
+    }
+    return { user: existing, isNewMember: false, matchedExisting: true, welcomePoints: 0 };
+  }
+
+  const nextId = Math.max(10, ...state.users.map((x) => x.id)) + 1;
+  const newMember: StaticUserRecord = {
+    id: nextId,
+    email: cleanEmail || `${phoneKey || `guest${Date.now()}`}@member.roarcoffee.vn`,
+    password: `auto-${Date.now()}`,
+    fullName: cleanName,
+    phone: cleanPhone,
+    role: 'customer',
+    memberCode: `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`,
+    tier: 'ROAR Member',
+    emailVerified: false,
+    walletBalance: 0,
+    points: 50,
+    createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+  };
+  state.users.push(newMember);
+  return { user: newMember, isNewMember: true, matchedExisting: false, welcomePoints: 50 };
+}
+
+function syncStaticOrderCustomers(state: StaticRuntimeState): boolean {
+  let changed = false;
+  for (const order of state.orders) {
+    const hasValidUser = order.user_id && state.users.some((u) => u.id === Number(order.user_id));
+    if (hasValidUser) continue;
+    const email = String(order.customer_email || '').trim().toLowerCase();
+    const phone = String(order.customer_phone || '').trim();
+    const name = String(order.customer_name || '').trim() || 'ROAR Customer';
+    if (!email && !phone) continue;
+    const resolved = resolveOrCreateStaticCustomer(state, {
+      customerName: name,
+      customerEmail: email,
+      customerPhone: phone,
+    });
+    order.user_id = resolved.user.id;
+    changed = true;
+  }
+  if (changed) writeState(state);
+  return changed;
 }
 
 function jsonResponse(data: any, status = 200): Response {
@@ -244,7 +329,8 @@ function toPublicUser(u: StaticUserRecord) {
     b2bVerified: Boolean(u.b2bVerified),
     addresses: [],
     walletBalance: u.walletBalance ?? 0,
-    points: { available: u.points ?? 120, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
+    walletBalanceVnd: u.walletBalance ?? 0,
+    points: { available: u.points ?? 50, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
     unreadNotifications: 0,
   };
 }
@@ -317,6 +403,8 @@ export async function handleStaticApiFallback(
       emailVerified: true,
       companyName: String(body.companyName || '').trim(),
       b2bVerified: false,
+      walletBalance: 0,
+      points: 50,
       createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
     };
     state.users.push(newUser);
@@ -401,6 +489,8 @@ export async function handleStaticApiFallback(
         memberCode: `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`,
         tier: 'ROAR Member',
         emailVerified: true,
+        walletBalance: 0,
+        points: 50,
         createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
       };
       state.users.push(found);
@@ -572,6 +662,14 @@ export async function handleStaticApiFallback(
 
   // 6. Create Order & Track Order
   if (pathname === '/api/orders' && method === 'POST') {
+    const cleanCustomerName = String(body.customerName || '').trim();
+    const cleanCustomerEmail = String(body.customerEmail || '').trim().toLowerCase();
+    const cleanCustomerPhone = String(body.customerPhone || '').trim();
+    const cleanShippingAddress = String(body.shippingAddress || '').trim();
+    if (!cleanCustomerName || !cleanCustomerEmail || !cleanCustomerPhone || !cleanShippingAddress || !Array.isArray(body.items) || body.items.length === 0) {
+      return jsonResponse({ error: 'Vui lòng nhập đầy đủ thông tin nhận hàng và sản phẩm.' }, 400);
+    }
+
     const allProds = [...(snap?.tables?.products || []), ...state.createdProducts];
     let subtotal = 0;
     const resolvedItems: any[] = [];
@@ -580,6 +678,7 @@ export async function handleStaticApiFallback(
       if (!p) continue;
       const qty = Math.max(1, Number(item.quantity || 1));
       const tiers = Array.isArray(p.pricing_tiers) ? p.pricing_tiers : JSON.parse(p.pricing_tiers_json || '[]');
+      const variants = Array.isArray(p.variants) ? p.variants : JSON.parse(p.variants_json || '[]');
       let unitPriceVnd = Number(p.price_vnd || 0);
       let variantLabel = String(item.variantLabel || 'Standard');
       let unit: 'kg' | 'unit' = 'unit';
@@ -589,6 +688,12 @@ export async function handleStaticApiFallback(
           unitPriceVnd = tier.priceVnd;
           variantLabel = `${qty} kg (${tier.labelVi})`;
           unit = 'kg';
+        }
+      } else if (variants.length > 0) {
+        const matchedVariant = variants.find((v: any) => v.label === item.variantLabel);
+        if (matchedVariant) {
+          unitPriceVnd = Number(matchedVariant.priceVnd || p.price_vnd || 0);
+          variantLabel = String(matchedVariant.label || variantLabel);
         }
       }
       const lineTotalVnd = unitPriceVnd * qty;
@@ -611,26 +716,102 @@ export async function handleStaticApiFallback(
     for (const row of snap?.tables?.site_settings || []) mergedSettings[row.key] = row.value;
     Object.assign(mergedSettings, state.settingsOverlay);
     const shippingCalc = calculateShippingFee(subtotal, mergedSettings);
-    const shippingFee = shippingCalc.feeVnd;
-    const total = subtotal + shippingFee;
-    const orderNumber = `RC-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    let shippingFee = shippingCalc.feeVnd;
+    let discountAmount = 0;
+    let appliedVoucher = '';
+    if (body.voucherCode) {
+      const code = String(body.voucherCode).trim().toUpperCase();
+      const promo = (snap?.tables?.promotions || []).find(
+        (p: any) => String(p.code || '').toUpperCase() === code && p.active
+      );
+      if (promo && subtotal >= Number(promo.min_order_value || 0)) {
+        appliedVoucher = promo.code;
+        if (promo.discount_type === 'percent') {
+          discountAmount = Math.round((subtotal * promo.discount_value) / 100);
+          if (promo.max_discount > 0) discountAmount = Math.min(discountAmount, promo.max_discount);
+        } else if (promo.discount_type === 'fixed') {
+          discountAmount = Math.min(subtotal, promo.discount_value);
+        } else if (promo.discount_type === 'free_shipping') {
+          shippingFee = 0;
+        }
+      }
+    }
+
     const u = resolveTokenUser(headers, state);
+    let pointsRedeemed = 0;
+    let pointsDiscount = 0;
+    const requestedPoints = Math.max(0, Math.floor(Number(body.pointsToRedeem || 0)));
+    if (requestedPoints > 0 && u) {
+      const loyalty = (snap?.tables?.loyalty_settings || [])[0] || { vnd_per_point: 100, max_redeem_percent: 30 };
+      const maxDiscountVnd = Math.floor((subtotal * (loyalty.max_redeem_percent || 30)) / 100);
+      const maxPts = Math.floor(maxDiscountVnd / (loyalty.vnd_per_point || 100));
+      pointsRedeemed = Math.min(requestedPoints, u.points ?? 0, maxPts);
+      pointsDiscount = pointsRedeemed * (loyalty.vnd_per_point || 100);
+    }
+
+    const total = Math.max(0, subtotal - discountAmount - pointsDiscount + shippingFee);
+    const paymentMethod = String(body.paymentMethod || 'vietqr');
+    let initialPaymentStatus = 'awaiting_payment';
+    const orderNumber = `RC-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+
+    if (paymentMethod === 'wallet') {
+      if (!u) return jsonResponse({ error: 'Vui lòng đăng nhập để thanh toán bằng Ví ROAR.' }, 401);
+      if ((u.walletBalance ?? 0) < total) {
+        return jsonResponse({ error: `Số dư Ví ROAR (${(u.walletBalance ?? 0).toLocaleString('vi-VN')}₫) không đủ.` }, 400);
+      }
+      u.walletBalance = (u.walletBalance ?? 0) - total;
+      state.walletTransactions.unshift({
+        id: Date.now(),
+        user_id: u.id,
+        type: 'spend',
+        amount: total,
+        bonus_amount: 0,
+        points_delta: 0,
+        balance_after: u.walletBalance,
+        note: `Thanh toán đơn hàng ${orderNumber}`,
+        created_at: new Date().toISOString(),
+      });
+      initialPaymentStatus = 'paid';
+    } else if (paymentMethod === 'points') {
+      if (!u) return jsonResponse({ error: 'Vui lòng đăng nhập để thanh toán bằng Điểm ROAR.' }, 401);
+      const loyalty = (snap?.tables?.loyalty_settings || [])[0] || { vnd_per_point: 100 };
+      const needed = Math.ceil(total / (loyalty.vnd_per_point || 100));
+      if ((u.points ?? 0) < needed) {
+        return jsonResponse({ error: `Bạn cần ${needed.toLocaleString('vi-VN')} điểm để thanh toán đơn này.` }, 400);
+      }
+      u.points = Math.max(0, (u.points ?? 0) - needed);
+      pointsRedeemed += needed;
+      pointsDiscount += total;
+      initialPaymentStatus = 'paid';
+    } else if (pointsRedeemed > 0 && u) {
+      u.points = Math.max(0, (u.points ?? 0) - pointsRedeemed);
+    }
+
+    const resolvedCustomer = resolveOrCreateStaticCustomer(state, {
+      authUser: u,
+      customerName: cleanCustomerName,
+      customerEmail: cleanCustomerEmail,
+      customerPhone: cleanCustomerPhone,
+    });
+
     const newOrder = {
       id: Date.now(),
       order_number: orderNumber,
-      user_id: u?.id || null,
-      customer_name: body.customerName,
-      customer_email: String(body.customerEmail || '').trim().toLowerCase(),
-      customer_phone: body.customerPhone,
-      shipping_address: body.shippingAddress,
+      user_id: resolvedCustomer.user.id,
+      customer_name: cleanCustomerName,
+      customer_email: cleanCustomerEmail || resolvedCustomer.user.email,
+      customer_phone: cleanCustomerPhone,
+      shipping_address: cleanShippingAddress,
       currency: body.currency || 'VND',
       subtotal,
-      discount_amount: 0,
-      points_discount: 0,
+      discount_amount: discountAmount,
+      points_redeemed: pointsRedeemed,
+      points_discount: pointsDiscount,
       shipping_fee: shippingFee,
       total,
-      payment_method: body.paymentMethod || 'vietqr',
-      payment_status: 'awaiting_payment',
+      voucher_code: appliedVoucher,
+      payment_method: paymentMethod,
+      payment_status: initialPaymentStatus,
       order_status: 'Pending',
       notes: body.notes || '',
       created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
@@ -645,10 +826,23 @@ export async function handleStaticApiFallback(
         orderNumber,
         total,
         subtotal,
+        discountAmount,
+        pointsDiscount,
         shippingFee,
         paymentMethod: newOrder.payment_method,
         customerEmail: newOrder.customer_email,
       },
+      membership: {
+        isNewMember: resolvedCustomer.isNewMember,
+        matchedExisting: resolvedCustomer.matchedExisting,
+        memberCode: resolvedCustomer.user.memberCode,
+        tier: resolvedCustomer.user.tier,
+        fullName: resolvedCustomer.user.fullName,
+        welcomePoints: resolvedCustomer.welcomePoints,
+      },
+      ...(!u && resolvedCustomer.isNewMember
+        ? { auth: { token: `static-token-${resolvedCustomer.user.id}`, user: toPublicUser(resolvedCustomer.user) } }
+        : {}),
     }, 201);
   }
 
@@ -726,38 +920,15 @@ export async function handleStaticApiFallback(
       }
     }
 
-    let member = authU;
-    let isNewMember = false;
-    let matchedExisting = Boolean(authU);
-    if (!member) {
-      member =
-        (finalSenderEmail ? state.users.find((x) => x.email.toLowerCase() === finalSenderEmail) : undefined) ||
-        (senderPhoneKey.length >= 8
-          ? state.users.find((x) => normalizePhoneKey(x.phone) === senderPhoneKey)
-          : undefined) ||
-        null;
-      if (member) {
-        matchedExisting = true;
-      } else {
-        const nextId = Math.max(10, ...state.users.map((x) => x.id)) + 1;
-        member = {
-          id: nextId,
-          email: finalSenderEmail || `${senderPhoneKey || `guest${Date.now()}`}@member.roarcoffee.vn`,
-          password: `auto-${Date.now()}`,
-          fullName: finalSenderName,
-          phone: finalSenderPhone,
-          role: 'customer',
-          memberCode: `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`,
-          tier: 'ROAR Member',
-          emailVerified: false,
-          walletBalance: 0,
-          points: 50,
-          createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
-        };
-        state.users.push(member);
-        isNewMember = true;
-      }
-    }
+    const resolvedCustomer = resolveOrCreateStaticCustomer(state, {
+      authUser: authU,
+      customerName: finalSenderName,
+      customerEmail: finalSenderEmail,
+      customerPhone: finalSenderPhone,
+    });
+    const member = resolvedCustomer.user;
+    const isNewMember = resolvedCustomer.isNewMember;
+    const matchedExisting = resolvedCustomer.matchedExisting;
 
     const unitPriceVnd = Number(product.price_vnd || 0);
     const qty = normalizedRecipients.length;
@@ -865,7 +1036,7 @@ export async function handleStaticApiFallback(
           phone: isNewMember ? member.phone : undefined,
           welcomePoints: isNewMember ? 50 : 0,
         },
-        ...(isNewMember ? { auth: { token: `static-token-${member.id}`, user: toPublicUser(member) } } : {}),
+        ...(!authU && isNewMember ? { auth: { token: `static-token-${member.id}`, user: toPublicUser(member) } } : {}),
       },
       201
     );
@@ -977,6 +1148,7 @@ export async function handleStaticApiFallback(
     if (!u || u.role !== 'admin') return jsonResponse({ error: 'Admin access required' }, 403);
 
     if (pathname === '/api/admin/overview') {
+      syncStaticOrderCustomers(state);
       const products = snap?.tables?.products || [];
       const articles = snap?.tables?.journal_articles || [];
       const revenue = state.orders.reduce((s, o) => s + Number(o.total || 0), 0);
@@ -1078,26 +1250,35 @@ export async function handleStaticApiFallback(
       return jsonResponse({ ok: true, order });
     }
     if (pathname === '/api/admin/customers' && method === 'GET') {
+      syncStaticOrderCustomers(state);
+      const sortedUsers = [...state.users].sort((a, b) => b.id - a.id);
       return jsonResponse({
-        customers: state.users.map((x) => {
+        customers: sortedUsers.map((x) => {
+          const xPhoneKey = normalizePhoneKey(x.phone);
           const userOrders = state.orders.filter(
-            (o) => Number(o.user_id) === x.id || String(o.customer_email || '').toLowerCase() === x.email.toLowerCase()
+            (o) =>
+              o.order_status !== 'Cancelled' &&
+              (Number(o.user_id) === x.id ||
+                String(o.customer_email || '').trim().toLowerCase() === x.email.toLowerCase() ||
+                (xPhoneKey.length >= 8 && normalizePhoneKey(o.customer_phone) === xPhoneKey))
           );
           const totalSpent = userOrders.reduce((s, o) => s + Number(o.total || 0), 0);
           return {
             id: x.id,
             email: x.email,
             full_name: x.fullName,
-            phone: x.phone,
+            phone: x.phone || '',
             role: x.role,
             member_code: x.memberCode,
             tier: x.tier,
+            company_name: x.companyName || '',
+            b2b_verified: Boolean(x.b2bVerified),
             wallet_balance_vnd: x.walletBalance ?? 0,
             orderCount: userOrders.length,
             totalSpent,
             unreadNotifications: 0,
             points: {
-              available: x.points ?? 120,
+              available: x.points ?? 50,
               pending: 0,
               redeemed: 0,
             },
@@ -1377,16 +1558,19 @@ export async function handleStaticApiFallback(
       return jsonResponse({ ok: true });
     }
     if (pathname === '/api/admin/wallets' && method === 'GET') {
-      const members = state.users.map((u) => ({
-        id: u.id,
-        email: u.email,
-        full_name: u.fullName,
-        member_code: u.memberCode,
-        tier: u.tier,
-        wallet_balance_vnd: u.walletBalance ?? 0,
-        wallet_balance: u.walletBalance ?? 0,
-        points: { available: u.points ?? 120, pending: 0, redeemed: 0 },
-      }));
+      syncStaticOrderCustomers(state);
+      const members = [...state.users]
+        .sort((a, b) => b.id - a.id)
+        .map((usr) => ({
+          id: usr.id,
+          email: usr.email,
+          full_name: usr.fullName,
+          member_code: usr.memberCode,
+          tier: usr.tier,
+          wallet_balance_vnd: usr.walletBalance ?? 0,
+          wallet_balance: usr.walletBalance ?? 0,
+          points: { available: usr.points ?? 50, pending: 0, redeemed: 0 },
+        }));
       return jsonResponse({
         members,
         users: members,

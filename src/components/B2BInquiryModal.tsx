@@ -19,7 +19,7 @@ export const B2BInquiryModal: React.FC<B2BInquiryModalProps> = ({
   productTitle = '',
 }) => {
   const { t } = useI18n();
-  const { showToast, user } = useStore();
+  const { showToast, user, apiFetch } = useStore();
 
   const [inquiryType, setInquiryType] = useState(defaultType);
   const [companyName, setCompanyName] = useState(user?.companyName || '');
@@ -38,7 +38,7 @@ export const B2BInquiryModal: React.FC<B2BInquiryModalProps> = ({
     e.preventDefault();
     setSubmitting(true);
     try {
-      const res = await fetch('/api/b2b/inquiries', {
+      const res = await apiFetch('/api/b2b/inquiries', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({

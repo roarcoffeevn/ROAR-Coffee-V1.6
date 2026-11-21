@@ -212,7 +212,7 @@ const PaymentQRPanel: React.FC<{
   initialPaymentStatus?: string;
 }> = ({ orderNumber, customerEmail, paymentMethod, totalVnd, initialPaymentStatus }) => {
   const { lang, t } = useI18n();
-  const { formatPrice, showToast } = useStore();
+  const { formatPrice, showToast, apiFetch } = useStore();
   const option = getPaymentOption(paymentMethod);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
   const [txRef, setTxRef] = useState('');
@@ -254,7 +254,7 @@ const PaymentQRPanel: React.FC<{
   const handleConfirmTransfer = async () => {
     setConfirming(true);
     try {
-      const res = await fetch(`/api/orders/${encodeURIComponent(orderNumber)}/confirm-payment-reference`, {
+      const res = await apiFetch(`/api/orders/${encodeURIComponent(orderNumber)}/confirm-payment-reference`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: customerEmail, transactionRef: txRef }),
@@ -517,7 +517,7 @@ export const CartPage: React.FC = () => {
 
 export const CheckoutPage: React.FC = () => {
   const { lang, t, localePath } = useI18n();
-  const { cart, cartSubtotalVnd, formatPrice, currency, user, clearCart, refreshUser, showToast, apiFetch, settings } = useStore();
+  const { cart, cartSubtotalVnd, formatPrice, currency, user, clearCart, refreshUser, setAuthSession, showToast, apiFetch, settings } = useStore();
 
   const defaultAddr = user?.addresses?.find((a: any) => a.isDefault) || user?.addresses?.[0];
   const [customerName, setCustomerName] = useState(defaultAddr?.recipient || user?.fullName || '');
@@ -535,6 +535,7 @@ export const CheckoutPage: React.FC = () => {
   const [pointsToRedeem, setPointsToRedeem] = useState(0);
   const [submitting, setSubmitting] = useState(false);
   const [confirmedOrder, setConfirmedOrder] = useState<any>(null);
+  const [confirmedMembership, setConfirmedMembership] = useState<any>(null);
 
   useEffect(() => {
     fetchPromotionsWithFallback()
@@ -600,9 +601,18 @@ export const CheckoutPage: React.FC = () => {
       const d = await res.json();
       if (res.ok) {
         setConfirmedOrder(d.order);
+        setConfirmedMembership(d.membership || null);
         clearCart();
-        refreshUser();
-        showToast(t('Đơn hàng đã được tạo thành công!', 'Order placed successfully!'));
+        if (!user && d.auth?.token && d.auth?.user) {
+          setAuthSession(d.auth.user, d.auth.token);
+        } else {
+          refreshUser();
+        }
+        showToast(
+          d.membership?.isNewMember
+            ? t('Đặt hàng thành công & đã kích hoạt thẻ Thành viên mới ROAR!', 'Order placed & your new ROAR Member profile is active!')
+            : t('Đơn hàng đã được tạo thành công!', 'Order placed successfully!')
+        );
       } else {
         showToast(d.error || t('Không thể tạo đơn hàng.', 'Unable to place order.'));
       }
@@ -622,6 +632,26 @@ export const CheckoutPage: React.FC = () => {
             </h1>
             <p className="font-mono text-base font-bold text-[#00552B] dark:text-[#C6A667]">{confirmedOrder.orderNumber}</p>
           </div>
+          {confirmedMembership?.memberCode && (
+            <div className="rounded-lg bg-emerald-50 dark:bg-emerald-950/35 border border-emerald-200 dark:border-emerald-700/40 px-4 py-3 text-xs text-left flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="font-bold text-[#00552B] dark:text-emerald-300">
+                  {confirmedMembership.isNewMember
+                    ? t('Chúc mừng Thành viên mới ROAR CLUB!', 'Welcome New ROAR CLUB Member!')
+                    : t('Đã ghi nhận vào hồ sơ Khách hàng ROAR', 'Recorded in ROAR Customer Profile')}
+                </p>
+                <p className="text-[#202020]/70 dark:text-[#F1EFEA]/70 mt-0.5">
+                  {confirmedMembership.fullName} · {t('Mã thành viên:', 'Member ID:')}{' '}
+                  <span className="font-mono font-bold">{confirmedMembership.memberCode}</span>
+                </p>
+              </div>
+              {confirmedMembership.isNewMember && Number(confirmedMembership.welcomePoints || 0) > 0 && (
+                <span className="px-2.5 py-1 rounded bg-[#00552B] text-white font-mono font-bold">
+                  +{confirmedMembership.welcomePoints} pts
+                </span>
+              )}
+            </div>
+          )}
           <div className="bg-[#F8F5EF] dark:bg-[#0E1512] p-4 rounded-lg text-sm space-y-1 text-left">
             <div className="flex justify-between">
               <span>{t('Tổng thanh toán:', 'Total Due:')}</span>

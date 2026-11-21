@@ -6,7 +6,7 @@ import { useStore } from '../context/StoreContext';
 
 export const Footer: React.FC = () => {
   const { lang, setLang, t, localePath } = useI18n();
-  const { settings, showToast } = useStore();
+  const { settings, showToast, apiFetch } = useStore();
   const [email, setEmail] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
@@ -15,7 +15,7 @@ export const Footer: React.FC = () => {
     if (!email.trim()) return;
     setSubmitting(true);
     try {
-      const res = await fetch('/api/newsletter', {
+      const res = await apiFetch('/api/newsletter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: email.trim(), lang }),

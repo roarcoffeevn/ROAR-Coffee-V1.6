@@ -94,6 +94,18 @@ export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = (
 
   useEffect(() => {
     loadWallets();
+    const onRefresh = () => {
+      loadWallets();
+    };
+    const onStorage = (e: StorageEvent) => {
+      if (!e.key || e.key === 'roar_static_runtime_v1') loadWallets();
+    };
+    window.addEventListener('roar:runtime-updated', onRefresh);
+    window.addEventListener('storage', onStorage);
+    return () => {
+      window.removeEventListener('roar:runtime-updated', onRefresh);
+      window.removeEventListener('storage', onStorage);
+    };
   }, []);
 
   const handleAdjust = async (e: React.FormEvent) => {
