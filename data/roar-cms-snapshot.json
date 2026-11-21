@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "exportedAt": "2026-11-21T05:49:42.169Z",
+  "exportedAt": "2026-11-21T10:30:27.535Z",
   "tables": {
     "products": [
       {
@@ -3259,6 +3259,10 @@
         "value": "+84 (0) 28 0000 0000 (Placeholder)"
       },
       {
+        "key": "facebook_url",
+        "value": "https://www.facebook.com/roarcoffeevn"
+      },
+      {
         "key": "footer_logo_mode",
         "value": "vertical"
       },
@@ -3276,7 +3280,7 @@
       },
       {
         "key": "office_address_vi",
-        "value": "TP. Hồ Chí Minh, Việt Nam (Địa chỉ chính thức cập nhật trước khi vận hành thương mại)"
+        "value": "TP. Hồ Chí Minh, Việt Nam "
       },
       {
         "key": "primary_color",
@@ -3287,12 +3291,40 @@
         "value": "#003D25"
       },
       {
+        "key": "shipping_rules_json",
+        "value": "[{\"minSubtotal\":0,\"maxSubtotal\":300000,\"feeVnd\":35000,\"labelVi\":\"Đơn dưới 300.000 ₫\",\"labelEn\":\"Orders under 300,000 VND\"},{\"minSubtotal\":300000,\"maxSubtotal\":500000,\"feeVnd\":20000,\"labelVi\":\"Đơn từ 300.000 ₫ – dưới 500.000 ₫\",\"labelEn\":\"Orders 300,000 – 499,999 VND\"},{\"minSubtotal\":500000,\"maxSubtotal\":null,\"feeVnd\":0,\"labelVi\":\"Đơn từ 500.000 ₫ (Miễn phí vận chuyển)\",\"labelEn\":\"Orders ≥ 500,000 VND (Free Shipping)\"}]"
+      },
+      {
+        "key": "social_facebook_enabled",
+        "value": "1"
+      },
+      {
         "key": "tagline_en",
         "value": "IGNITING COURAGE. DEFINING CHARACTER."
       },
       {
         "key": "tagline_vi",
         "value": "KHƠI BẢN LĨNH. ĐẬM CHẤT RIÊNG."
+      },
+      {
+        "key": "vcb_usd_buy",
+        "value": "25570"
+      },
+      {
+        "key": "vcb_usd_sell",
+        "value": "25980"
+      },
+      {
+        "key": "vcb_usd_transfer",
+        "value": "25600"
+      },
+      {
+        "key": "vcb_usd_updated_at",
+        "value": "11/21/2026 5:07:32 PM"
+      },
+      {
+        "key": "wallet_approval_mode",
+        "value": "manual"
       }
     ],
     "media_assets": []

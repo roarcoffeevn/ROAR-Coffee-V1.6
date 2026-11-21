@@ -531,9 +531,16 @@ export async function handleStaticApiFallback(
         email_verified: 1,
         addresses: [],
       },
-      points: { available: 120, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
+      points: { available: u.points ?? 120, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
       ledger: [],
       orders: userOrders,
+      giftDispatches: userOrders
+        .flatMap((o: any) => (Array.isArray(o.gift_dispatches) ? o.gift_dispatches : []))
+        .map((d: any) =>
+          d.status === 'pending_payment'
+            ? { ...d, voucher_code: 'ROAR-GIFT-••••-••••', is_code_masked: true }
+            : d
+        ),
       activeVouchers: (snap?.tables?.promotions || []).filter((p: any) => p.active),
       tiers: snap?.tables?.membership_tiers || [],
       loyaltySettings: (snap?.tables?.loyalty_settings || [])[0] || null,
@@ -667,6 +674,231 @@ export async function handleStaticApiFallback(
     });
   }
 
+  // 6b. Gift Voucher Checkout, My Vouchers & Payment Confirmation (Static Fallback)
+  if (pathname === '/api/gift-vouchers/checkout' && method === 'POST') {
+    const normalizePhoneKey = (raw: string) => {
+      const d = String(raw || '').replace(/\D/g, '');
+      if (!d) return '';
+      return d.startsWith('84') && d.length >= 10 ? `0${d.slice(2)}` : d;
+    };
+    const maskDispatches = (list: any[]) =>
+      list.map((d) =>
+        d.status === 'pending_payment'
+          ? { ...d, voucher_code: 'ROAR-GIFT-••••-••••', is_code_masked: true }
+          : d
+      );
+
+    const allProds = [...(snap?.tables?.products || []), ...state.createdProducts];
+    const product = allProds.find(
+      (p: any) => p.id === Number(body.productId) || (body.productSlug && p.slug === String(body.productSlug))
+    );
+    if (!product || (product.sub_category !== 'Gift Voucher' && !String(product.slug || '').startsWith('gift-voucher-'))) {
+      return jsonResponse({ error: 'Sản phẩm Gift Voucher không tồn tại' }, 404);
+    }
+
+    const mode = body.purchaseMode === 'self' ? 'self' : 'gift';
+    const channel = body.deliveryChannel === 'email' ? 'email' : 'zalo_sms';
+    const authU = resolveTokenUser(headers, state);
+    const finalSenderName = String(body.senderName || authU?.fullName || '').trim();
+    const finalSenderEmail = String(body.senderEmail || authU?.email || '').trim().toLowerCase();
+    const finalSenderPhone = String(body.senderPhone || authU?.phone || '').trim();
+    const senderPhoneKey = normalizePhoneKey(finalSenderPhone);
+
+    if (!finalSenderName || (!finalSenderEmail && !finalSenderPhone)) {
+      return jsonResponse({ error: 'Vui lòng nhập họ tên và số điện thoại hoặc email của người mua.' }, 400);
+    }
+
+    const normalizedRecipients: Array<{ name: string; contact: string }> = [];
+    if (mode === 'self') {
+      const qty = Math.min(20, Math.max(1, Math.floor(Number(body.selfQuantity || 1))));
+      const contact = channel === 'email' ? finalSenderEmail || finalSenderPhone : finalSenderPhone || finalSenderEmail;
+      for (let i = 0; i < qty; i++) normalizedRecipients.push({ name: finalSenderName, contact });
+    } else {
+      const recs = Array.isArray(body.recipients) ? body.recipients : [];
+      if (recs.length === 0 || recs.length > 20) {
+        return jsonResponse({ error: 'Vui lòng thêm từ 1 đến 20 người nhận Voucher.' }, 400);
+      }
+      for (const r of recs) {
+        if (!String(r?.name || '').trim() || !String(r?.contact || '').trim()) {
+          return jsonResponse({ error: 'Mỗi người nhận cần nhập đầy đủ tên và SĐT Zalo hoặc Email.' }, 400);
+        }
+        normalizedRecipients.push({ name: String(r.name).trim(), contact: String(r.contact).trim() });
+      }
+    }
+
+    let member = authU;
+    let isNewMember = false;
+    let matchedExisting = Boolean(authU);
+    if (!member) {
+      member =
+        (finalSenderEmail ? state.users.find((x) => x.email.toLowerCase() === finalSenderEmail) : undefined) ||
+        (senderPhoneKey.length >= 8
+          ? state.users.find((x) => normalizePhoneKey(x.phone) === senderPhoneKey)
+          : undefined) ||
+        null;
+      if (member) {
+        matchedExisting = true;
+      } else {
+        const nextId = Math.max(10, ...state.users.map((x) => x.id)) + 1;
+        member = {
+          id: nextId,
+          email: finalSenderEmail || `${senderPhoneKey || `guest${Date.now()}`}@member.roarcoffee.vn`,
+          password: `auto-${Date.now()}`,
+          fullName: finalSenderName,
+          phone: finalSenderPhone,
+          role: 'customer',
+          memberCode: `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`,
+          tier: 'ROAR Member',
+          emailVerified: false,
+          walletBalance: 0,
+          points: 50,
+          createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '),
+        };
+        state.users.push(member);
+        isNewMember = true;
+      }
+    }
+
+    const unitPriceVnd = Number(product.price_vnd || 0);
+    const qty = normalizedRecipients.length;
+    const subtotal = unitPriceVnd * qty;
+    const finalMethod = String(body.paymentMethod || 'vietqr');
+    let discountAmount = 0;
+    if (body.promoCode) {
+      const promo = (snap?.tables?.promotions || []).find(
+        (p: any) => String(p.code || '').toUpperCase() === String(body.promoCode).trim().toUpperCase() && p.active
+      );
+      if (promo && subtotal >= Number(promo.min_order_value || 0)) {
+        discountAmount =
+          promo.discount_type === 'percent'
+            ? Math.min(promo.max_discount || subtotal, Math.round((subtotal * promo.discount_value) / 100))
+            : Math.min(subtotal, promo.discount_value || 0);
+      }
+    }
+    const total = Math.max(0, subtotal - discountAmount);
+    const orderNumber = `RC-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}-${Math.floor(1000 + Math.random() * 9000)}`;
+    const isPaid = finalMethod === 'wallet' || finalMethod === 'points' || total === 0;
+    const dispatchStatus = isPaid ? 'active' : 'pending_payment';
+    const expiresAt = new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    const resolvedOrderEmail = finalSenderEmail || member.email;
+
+    const dispatches = normalizedRecipients.map((r, idx) => ({
+      id: Date.now() + idx,
+      order_id: Date.now(),
+      order_number: orderNumber,
+      product_id: product.id,
+      product_slug: product.slug,
+      voucher_code: `ROAR-GIFT-${Math.random().toString(36).slice(2, 6).toUpperCase()}-${Math.random().toString(36).slice(2, 6).toUpperCase()}`,
+      purchase_mode: mode,
+      delivery_channel: channel,
+      sender_name: finalSenderName,
+      recipient_name: r.name,
+      recipient_contact: r.contact,
+      gift_message: String(body.giftMessage || '').trim().slice(0, 300),
+      face_value_vnd: unitPriceVnd,
+      status: dispatchStatus,
+      expires_at: expiresAt,
+    }));
+
+    const newOrder = {
+      id: Date.now(),
+      order_number: orderNumber,
+      user_id: member.id,
+      customer_name: finalSenderName,
+      customer_email: resolvedOrderEmail,
+      customer_phone: finalSenderPhone || resolvedOrderEmail,
+      shipping_address: `[E-Voucher Digital Dispatch]`,
+      currency: 'VND',
+      subtotal,
+      discount_amount: discountAmount,
+      points_discount: 0,
+      shipping_fee: 0,
+      total,
+      payment_method: finalMethod,
+      payment_status: isPaid ? 'paid' : 'awaiting_payment',
+      order_status: isPaid ? 'Completed' : 'Pending',
+      notes: String(body.giftMessage || ''),
+      created_at: new Date().toISOString().slice(0, 19).replace('T', ' '),
+      items: [
+        {
+          id: Date.now(),
+          product_id: product.id,
+          sku: product.sku,
+          product_name_vi: product.name_vi,
+          product_name_en: product.name_en,
+          variant_label: `E-Voucher (${unitPriceVnd.toLocaleString('vi-VN')}₫)`,
+          quantity: qty,
+          unit_price_vnd: unitPriceVnd,
+          line_total_vnd: subtotal,
+        },
+      ],
+      gift_dispatches: dispatches,
+    };
+    state.orders.unshift(newOrder);
+    writeState(state);
+
+    return jsonResponse(
+      {
+        ok: true,
+        order: {
+          orderId: newOrder.id,
+          orderNumber,
+          subtotal,
+          discountAmount,
+          pointsDiscount: 0,
+          shippingFee: 0,
+          total,
+          paymentMethod: finalMethod,
+          paymentStatus: newOrder.payment_status,
+          orderStatus: newOrder.order_status,
+          customerEmail: resolvedOrderEmail,
+          customerPhone: finalSenderPhone,
+        },
+        dispatches: maskDispatches(dispatches),
+        membership: {
+          isNewMember,
+          matchedExisting,
+          memberCode: member.memberCode,
+          tier: member.tier,
+          fullName: member.fullName,
+          email: isNewMember ? member.email : undefined,
+          phone: isNewMember ? member.phone : undefined,
+          welcomePoints: isNewMember ? 50 : 0,
+        },
+        ...(isNewMember ? { auth: { token: `static-token-${member.id}`, user: toPublicUser(member) } } : {}),
+      },
+      201
+    );
+  }
+
+  if (pathname === '/api/gift-vouchers/mine' && method === 'GET') {
+    const me = resolveTokenUser(headers, state);
+    if (!me) return jsonResponse({ error: 'Unauthorized' }, 401);
+    const list = state.orders
+      .filter((o: any) => o.user_id === me.id || String(o.customer_email || '').toLowerCase() === me.email.toLowerCase())
+      .flatMap((o: any) => (Array.isArray(o.gift_dispatches) ? o.gift_dispatches : []))
+      .map((d: any) =>
+        d.status === 'pending_payment'
+          ? { ...d, voucher_code: 'ROAR-GIFT-••••-••••', is_code_masked: true }
+          : d
+      );
+    return jsonResponse({ dispatches: list });
+  }
+
+  if (/^\/api\/orders\/[^/]+\/confirm-payment-reference$/.test(pathname) && method === 'POST') {
+    const orderNo = decodeURIComponent(pathname.split('/')[3] || '').toUpperCase();
+    const email = String(body.email || '').trim().toLowerCase();
+    const target = state.orders.find(
+      (o: any) =>
+        String(o.order_number || '').toUpperCase() === orderNo &&
+        (!email || String(o.customer_email || '').toLowerCase() === email)
+    );
+    if (!target) return jsonResponse({ error: 'Order not found' }, 404);
+    target.payment_status = 'pending_verification';
+    writeState(state);
+    return jsonResponse({ ok: true, paymentStatus: 'pending_verification' });
+  }
+
   if (pathname === '/api/orders/track' && method === 'GET') {
     const orderNumber = (searchParams.get('orderNumber') || '').trim().toUpperCase();
     const phone = (searchParams.get('phone') || '').replace(/\D/g, '').replace(/^84/, '0');
@@ -690,6 +922,13 @@ export async function handleStaticApiFallback(
     const enriched = matches.map((o) => ({
       ...o,
       shipping_tracking: buildLiveShippingTracking(o),
+      gift_dispatches: Array.isArray(o.gift_dispatches)
+        ? o.gift_dispatches.map((d: any) =>
+            d.status === 'pending_payment'
+              ? { ...d, voucher_code: 'ROAR-GIFT-••••-••••', is_code_masked: true }
+              : d
+          )
+        : [],
     }));
     return jsonResponse({ orders: enriched, order: enriched[0] });
   }
@@ -997,37 +1236,57 @@ export async function handleStaticApiFallback(
       return jsonResponse({ ok: true });
     }
     if (pathname === '/api/admin/wallets' && method === 'GET') {
+      const members = state.users.map((u) => ({
+        id: u.id,
+        email: u.email,
+        full_name: u.fullName,
+        member_code: u.memberCode,
+        tier: u.tier,
+        wallet_balance_vnd: u.walletBalance ?? 0,
+        wallet_balance: u.walletBalance ?? 0,
+        points: { available: u.points ?? 120, pending: 0, redeemed: 0 },
+      }));
       return jsonResponse({
-        users: state.users.map((u) => ({
-          id: u.id,
-          email: u.email,
-          full_name: u.fullName,
-          member_code: u.memberCode,
-          tier: u.tier,
-          wallet_balance: u.walletBalance ?? 0,
-          points: u.points ?? 0,
-        })),
+        members,
+        users: members,
         transactions: state.walletTransactions.slice(0, 100),
       });
     }
     if (pathname === '/api/admin/wallets/adjust' && method === 'POST') {
       const targetUserId = Number(body.userId);
-      const amountDelta = Number(body.amountDelta || 0);
-      const pointsDelta = Number(body.pointsDelta || 0);
+      const amountVnd = Math.floor(Number(body.amountVnd ?? body.amountDelta ?? 0));
+      const pointsDelta = Math.floor(Number(body.pointsDelta || 0));
+      const applyBonus = Boolean(body.applyBonus);
       const note = String(body.note || 'Admin điều chỉnh').trim();
       const target = state.users.find((u) => u.id === targetUserId);
       if (!target) return jsonResponse({ error: 'Không tìm thấy thành viên.' }, 404);
-      target.walletBalance = Math.max(0, (target.walletBalance ?? 0) + amountDelta);
-      target.points = Math.max(0, (target.points ?? 0) + pointsDelta);
-      if (amountDelta !== 0) {
+      let bonusPct = 0;
+      let bonusVnd = 0;
+      let totalCredit = amountVnd;
+      let autoPoints = 0;
+      if (amountVnd > 0 && applyBonus) {
+        bonusPct = amountVnd >= 2000000 ? 30 : amountVnd >= 1000000 ? 20 : amountVnd >= 500000 ? 15 : 10;
+        bonusVnd = Math.round((amountVnd * bonusPct) / 100);
+        totalCredit = amountVnd + bonusVnd;
+        autoPoints = Math.floor(totalCredit / 10000);
+      }
+      const finalPoints = pointsDelta + autoPoints;
+      target.walletBalance = Math.max(0, (target.walletBalance ?? 0) + totalCredit);
+      target.points = Math.max(0, (target.points ?? 0) + finalPoints);
+      if (totalCredit !== 0) {
         state.walletTransactions.unshift({
           id: Date.now(),
           user_id: target.id,
-          type: amountDelta > 0 ? 'admin_credit' : 'admin_debit',
-          amount: Math.abs(amountDelta),
-          bonus_amount: 0,
-          points_delta: pointsDelta,
+          full_name: target.fullName,
+          tx_type: totalCredit > 0 ? 'topup' : 'spend',
+          type: totalCredit > 0 ? 'admin_credit' : 'admin_debit',
+          amount_vnd: amountVnd,
+          bonus_vnd: bonusVnd,
+          amount: Math.abs(amountVnd),
+          bonus_amount: bonusVnd,
+          points_delta: finalPoints,
           balance_after: target.walletBalance,
+          reference_code: `ADM-${Date.now().toString(36).toUpperCase()}`,
           note,
           created_at: new Date().toISOString(),
         });
@@ -1036,6 +1295,7 @@ export async function handleStaticApiFallback(
       return jsonResponse({
         ok: true,
         walletBalance: target.walletBalance,
+        walletBalanceVnd: target.walletBalance,
         points: target.points,
       });
     }

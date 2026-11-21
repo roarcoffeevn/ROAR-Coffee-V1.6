@@ -17,6 +17,7 @@ export const PersonalitiesPage: React.FC = () => {
       setCustomBreadcrumb(null);
       return;
     }
+    window.scrollTo({ top: 0, behavior: 'smooth' });
     setCustomBreadcrumb([
       { labelVi: '7 Cá Tính Thương Hiệu', labelEn: 'Seven Personalities', to: '/personalities' },
       { labelVi: selected.animal_vi, labelEn: selected.animal_en },
@@ -26,6 +27,17 @@ export const PersonalitiesPage: React.FC = () => {
 
   if (slug && selected) {
     const isPanther = selected.slug === 'black-panther';
+    const currentIndex = personalities.findIndex((p) => p.slug === selected.slug);
+    const prevPersonality =
+      personalities.length > 1
+        ? personalities[(currentIndex - 1 + personalities.length) % personalities.length]
+        : null;
+    const nextPersonality =
+      personalities.length > 1
+        ? personalities[(currentIndex + 1) % personalities.length]
+        : null;
+    const otherPersonalities = personalities.filter((p) => p.slug !== selected.slug);
+
     return (
       <div className={isPanther ? 'bg-[#0B0B0B] text-[#F8F5EF]' : 'bg-[#F8F5EF] dark:bg-[#0E1512] text-[#202020] dark:text-[#F1EFEA]'}>
         <div className="max-w-[1100px] mx-auto px-6 py-14 space-y-10">
@@ -100,6 +112,125 @@ export const PersonalitiesPage: React.FC = () => {
               </div>
             </div>
           </div>
+
+          {/* Prev / Next Story Bar */}
+          {(prevPersonality || nextPersonality) && (
+            <div
+              className={`pt-6 border-t flex flex-wrap items-center justify-between gap-4 ${
+                isPanther ? 'border-[#C6A667]/20' : 'border-[#202020]/10 dark:border-white/10'
+              }`}
+            >
+              {prevPersonality ? (
+                <Link
+                  to={localePath(`/personalities/${prevPersonality.slug}`)}
+                  className={`inline-flex items-center gap-2 text-xs sm:text-sm font-semibold transition-colors ${
+                    isPanther ? 'text-[#F8F5EF]/80 hover:text-[#C6A667]' : 'text-[#202020]/75 dark:text-[#F1EFEA]/75 hover:text-[#00552B] dark:hover:text-[#C6A667]'
+                  }`}
+                >
+                  <ArrowLeft className="w-4 h-4 shrink-0" />
+                  <span>
+                    {t('Trước:', 'Previous:')}{' '}
+                    <strong>{lang === 'vi' ? prevPersonality.animal_vi : prevPersonality.animal_en}</strong>
+                  </span>
+                </Link>
+              ) : (
+                <span />
+              )}
+
+              {nextPersonality && (
+                <Link
+                  to={localePath(`/personalities/${nextPersonality.slug}`)}
+                  className={`inline-flex items-center gap-2 text-xs sm:text-sm font-semibold transition-colors ${
+                    isPanther ? 'text-[#F8F5EF]/80 hover:text-[#C6A667]' : 'text-[#202020]/75 dark:text-[#F1EFEA]/75 hover:text-[#00552B] dark:hover:text-[#C6A667]'
+                  }`}
+                >
+                  <span>
+                    {t('Tiếp theo:', 'Next:')}{' '}
+                    <strong>{lang === 'vi' ? nextPersonality.animal_vi : nextPersonality.animal_en}</strong>
+                  </span>
+                  <ArrowRight className="w-4 h-4 shrink-0" />
+                </Link>
+              )}
+            </div>
+          )}
+
+          {/* Remaining 6 Brand Personalities Grid */}
+          {otherPersonalities.length > 0 && (
+            <section className="pt-4 space-y-5">
+              <div className="flex flex-wrap items-end justify-between gap-3">
+                <div>
+                  <p
+                    className={`text-[11px] font-semibold uppercase tracking-[0.18em] ${
+                      isPanther ? 'text-[#C6A667]' : 'text-[#00552B] dark:text-[#C6A667]'
+                    }`}
+                  >
+                    {t('KHÁM PHÁ THÊM', 'EXPLORE MORE')}
+                  </p>
+                  <h2 className="text-xl sm:text-2xl font-bold mt-1">
+                    {t('Các cá tính thương hiệu còn lại', 'Discover the Other ROAR Personalities')}
+                  </h2>
+                </div>
+                <Link
+                  to={localePath('/personalities')}
+                  className={`text-xs font-semibold hover:underline ${
+                    isPanther ? 'text-[#C6A667]' : 'text-[#00552B] dark:text-[#C6A667]'
+                  }`}
+                >
+                  {t('Xem tổng quan 7 cá tính →', 'View all 7 archetypes →')}
+                </Link>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3.5">
+                {otherPersonalities.map((other) => {
+                  const otherIsPanther = other.slug === 'black-panther';
+                  const originalIdx = personalities.findIndex((x) => x.slug === other.slug);
+                  const idxBadge = String(originalIdx + 1).padStart(2, '0');
+                  return (
+                    <Link
+                      key={other.slug}
+                      to={localePath(`/personalities/${other.slug}`)}
+                      className={`group rounded-xl border overflow-hidden flex flex-col transition-all duration-200 hover:-translate-y-0.5 ${
+                        isPanther
+                          ? 'bg-[#141615] border-[#C6A667]/25 hover:border-[#C6A667]/70 text-[#F8F5EF]'
+                          : otherIsPanther
+                            ? 'bg-[#111312] border-[#C6A667]/40 hover:border-[#C6A667] text-[#F8F5EF]'
+                            : 'bg-white dark:bg-[#16221C] border-[#202020]/10 dark:border-white/10 hover:border-[#00552B]/45 dark:hover:border-[#C6A667]/50 text-[#202020] dark:text-[#F1EFEA]'
+                      }`}
+                    >
+                      <div className="aspect-square overflow-hidden bg-[#0E1310] relative">
+                        <MediaImage
+                          imageKey={other.custom_image_url || other.image_key}
+                          alt={`${other.animal_en} — ${other.animal_vi}`}
+                          className="w-full h-full object-cover scale-[1.08] group-hover:scale-[1.13] transition-transform duration-200"
+                        />
+                        <span className="absolute top-2 left-2 px-1.5 py-0.5 rounded bg-black/65 text-[#C6A667] font-mono text-[10px] font-bold tabular-nums">
+                          {idxBadge}
+                        </span>
+                      </div>
+                      <div className="p-3 flex-1 flex flex-col justify-between space-y-1.5">
+                        <div>
+                          <p className="text-sm font-bold leading-snug group-hover:text-[#00552B] dark:group-hover:text-[#C6A667] transition-colors">
+                            {lang === 'vi' ? other.animal_vi : other.animal_en}
+                          </p>
+                          <p className="text-[11px] opacity-65 line-clamp-2 mt-0.5">
+                            {lang === 'vi' ? other.traits_vi : other.traits_en}
+                          </p>
+                        </div>
+                        <span
+                          className={`inline-flex items-center gap-1 text-[11px] font-semibold pt-1 ${
+                            isPanther || otherIsPanther ? 'text-[#C6A667]' : 'text-[#00552B] dark:text-[#C6A667]'
+                          }`}
+                        >
+                          <span>{t('Xem câu chuyện', 'Read story')}</span>
+                          <ArrowRight className="w-3 h-3 transition-transform group-hover:translate-x-0.5" />
+                        </span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </div>
       </div>
     );

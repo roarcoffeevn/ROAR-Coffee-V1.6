@@ -5,7 +5,7 @@ import { useStore } from '../context/StoreContext';
 
 export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = ({ onGoProducts }) => {
   const { t } = useI18n();
-  const { apiFetch, showToast } = useStore();
+  const { apiFetch, showToast, refreshUser } = useStore();
   const [members, setMembers] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [topupRequests, setTopupRequests] = useState<any[]>([]);
@@ -40,6 +40,9 @@ export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = (
         const rd = await reqRes.json();
         setApprovalMode(rd.approvalMode === 'auto' ? 'auto' : 'manual');
         setTopupRequests(Array.isArray(rd.requests) ? rd.requests : []);
+      } else {
+        const err = await reqRes.json().catch(() => ({}));
+        if (err.error) showToast(err.error);
       }
     } finally {
       setLoading(false);
@@ -59,6 +62,9 @@ export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = (
           ? t('Đã chuyển sang chế độ Duyệt thủ công khi công ty nhận chuyển khoản', 'Switched to Manual bank verification mode')
           : t('Đã chuyển sang chế độ Tự động duyệt nạp ví', 'Switched to Auto-approve mode')
       );
+    } else {
+      const d = await res.json().catch(() => ({}));
+      showToast(d.error || t('Không thể đổi chế độ duyệt', 'Failed to change approval mode'));
     }
   };
 
@@ -77,7 +83,7 @@ export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = (
             ? t('Đã xác nhận nhận tiền, cộng Ví ROAR & gửi thông báo thành công cho thành viên!', 'Approved top-up, credited wallet & notified member!')
             : t('Đã từ chối yêu cầu nạp tiền & thông báo cho thành viên.', 'Rejected top-up request & notified member.')
         );
-        await loadWallets();
+        await Promise.all([loadWallets(), refreshUser()]);
       } else {
         showToast(d.error || t('Không thể xử lý yêu cầu', 'Unable to process request'));
       }
@@ -111,7 +117,7 @@ export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = (
         showToast(t('Đã cập nhật Ví & Điểm thành viên thành công!', 'Updated member wallet & points!'));
         setNote('');
         setPointsDelta('0');
-        await loadWallets();
+        await Promise.all([loadWallets(), refreshUser()]);
       } else {
         showToast(d.error || t('Không thể cập nhật Ví', 'Failed to update wallet'));
       }

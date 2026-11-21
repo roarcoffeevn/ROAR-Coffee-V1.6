@@ -573,6 +573,9 @@ export const AdminCmsPage: React.FC = () => {
       if (res.ok) {
         await refreshBootstrap();
         showToast(t('Đã lưu cài đặt website', 'Saved site settings'));
+      } else {
+        const d = await res.json().catch(() => ({}));
+        showToast(d.error || t('Không thể lưu cài đặt website', 'Failed to save site settings'));
       }
     } finally {
       setSavingSettings(false);
@@ -2569,6 +2572,192 @@ export const AdminCmsPage: React.FC = () => {
                       className="w-full border border-slate-200 rounded-lg px-3 py-2"
                     />
                   </div>
+                </div>
+
+                {/* Footer Social Media Icons Configuration */}
+                <div className="pt-4 border-t border-slate-200 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h3 className="text-sm font-bold text-slate-900">
+                        {t('Cấu hình Biểu tượng Mạng xã hội (Footer Social Icons)', 'Footer Social Media Icons Configuration')}
+                      </h3>
+                      <p className="text-slate-500 text-[11px] mt-0.5">
+                        {t(
+                          'Bật/tắt và nhập đường dẫn chính thức cho 5 biểu tượng mạng xã hội hiển thị ở chân trang website. Link phải bắt đầu bằng https://.',
+                          'Enable/disable and set official URLs for the 5 social icons displayed in the storefront footer. Links must start with https://.'
+                        )}
+                      </p>
+                    </div>
+                  </div>
+
+                  {(() => {
+                    const zaloDigits = String(siteSettings.zalo_phone || siteSettings.hotline || '0901234567').replace(/\D/g, '') || '0901234567';
+                    const socialRows = [
+                      {
+                        key: 'facebook',
+                        label: 'Facebook',
+                        urlKey: 'facebook_url',
+                        enabledKey: 'social_facebook_enabled',
+                        placeholder: 'https://www.facebook.com/roarcoffeevn',
+                        icon: (
+                          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current" aria-hidden="true">
+                            <path d="M13.5 21v-8h2.7l.4-3h-3.1V8.1c0-.9.3-1.5 1.6-1.5h1.7V3.9c-.3 0-1.3-.1-2.4-.1-2.4 0-4.1 1.5-4.1 4.2V10H7.6v3h2.7v8h3.2z" />
+                          </svg>
+                        ),
+                      },
+                      {
+                        key: 'instagram',
+                        label: 'Instagram',
+                        urlKey: 'instagram_url',
+                        enabledKey: 'social_instagram_enabled',
+                        placeholder: 'https://www.instagram.com/roarcoffee.vn',
+                        icon: (
+                          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-none stroke-current" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <rect x="3" y="3" width="18" height="18" rx="5" />
+                            <circle cx="12" cy="12" r="4" />
+                            <circle cx="17.5" cy="6.5" r="0.9" className="fill-current stroke-none" />
+                          </svg>
+                        ),
+                      },
+                      {
+                        key: 'tiktok',
+                        label: 'TikTok',
+                        urlKey: 'tiktok_url',
+                        enabledKey: 'social_tiktok_enabled',
+                        placeholder: 'https://www.tiktok.com/@roarcoffee.vn',
+                        icon: (
+                          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current" aria-hidden="true">
+                            <path d="M16.6 5.8A4.4 4.4 0 0 0 19.5 7v2.9a7.3 7.3 0 0 1-3-.7v5.5a5.3 5.3 0 1 1-4.6-5.2v2.9a2.4 2.4 0 1 0 1.7 2.3V3h3a4.4 4.4 0 0 0 0 2.8z" />
+                          </svg>
+                        ),
+                      },
+                      {
+                        key: 'youtube',
+                        label: 'YouTube',
+                        urlKey: 'youtube_url',
+                        enabledKey: 'social_youtube_enabled',
+                        placeholder: 'https://www.youtube.com/@roarcoffeevn',
+                        icon: (
+                          <svg viewBox="0 0 24 24" className="w-4 h-4 fill-current" aria-hidden="true">
+                            <path d="M21.6 7.2a2.7 2.7 0 0 0-1.9-1.9C18 4.8 12 4.8 12 4.8s-6 0-7.7.5A2.7 2.7 0 0 0 2.4 7.2 28.4 28.4 0 0 0 2 12a28.4 28.4 0 0 0 .4 4.8 2.7 2.7 0 0 0 1.9 1.9c1.7.5 7.7.5 7.7.5s6 0 7.7-.5a2.7 2.7 0 0 0 1.9-1.9A28.4 28.4 0 0 0 22 12a28.4 28.4 0 0 0-.4-4.8zM10 15.1V8.9l5.2 3.1L10 15.1z" />
+                          </svg>
+                        ),
+                      },
+                      {
+                        key: 'zalo',
+                        label: 'Zalo OA / Hotline',
+                        urlKey: 'zalo_url',
+                        enabledKey: 'social_zalo_enabled',
+                        placeholder: `https://zalo.me/${zaloDigits}`,
+                        icon: <span className="text-[10px] font-bold tracking-tight leading-none">Zalo</span>,
+                      },
+                    ];
+
+                    const activePreviewRows = socialRows.filter((r) => siteSettings[r.enabledKey] !== '0');
+
+                    return (
+                      <div className="space-y-2.5">
+                        <div className="grid grid-cols-1 gap-2.5">
+                          {socialRows.map((row) => {
+                            const isEnabled = siteSettings[row.enabledKey] !== '0';
+                            const val = siteSettings[row.urlKey] || '';
+                            const hasInvalidPrefix = val.trim().length > 0 && !/^https?:\/\//i.test(val.trim());
+                            return (
+                              <div
+                                key={row.key}
+                                className={`p-3 rounded-xl border transition-colors flex flex-col sm:flex-row sm:items-center gap-3 ${
+                                  isEnabled ? 'bg-slate-50/70 border-slate-200' : 'bg-slate-100/60 border-slate-200/70 opacity-75'
+                                }`}
+                              >
+                                <div className="flex items-center gap-2.5 sm:w-44 shrink-0">
+                                  <span className="w-8 h-8 rounded-full bg-[#003D25] text-[#C6A667] flex items-center justify-center shrink-0">
+                                    {row.icon}
+                                  </span>
+                                  <div className="min-w-0">
+                                    <p className="font-bold text-slate-900 truncate">{row.label}</p>
+                                    <p className="text-[10px] font-mono text-slate-400">{row.urlKey}</p>
+                                  </div>
+                                </div>
+
+                                <div className="flex-1 min-w-0">
+                                  <input
+                                    type="text"
+                                    value={val}
+                                    onChange={(e) => setSiteSettings({ ...siteSettings, [row.urlKey]: e.target.value })}
+                                    placeholder={row.placeholder}
+                                    className={`w-full border rounded-lg px-3 py-1.5 bg-white font-mono text-[11px] ${
+                                      hasInvalidPrefix ? 'border-red-400 focus:outline-red-500' : 'border-slate-200'
+                                    }`}
+                                  />
+                                  {hasInvalidPrefix && (
+                                    <p className="text-[10px] text-red-600 mt-0.5">
+                                      {t('URL phải bắt đầu bằng https:// hoặc http://', 'URL must start with https:// or http://')}
+                                    </p>
+                                  )}
+                                  {row.key === 'zalo' && !val && (
+                                    <p className="text-[10px] text-slate-400 mt-0.5">
+                                      {t(`Để trống sẽ tự dùng SĐT Zalo: https://zalo.me/${zaloDigits}`, `Leave blank to use Zalo phone: https://zalo.me/${zaloDigits}`)}
+                                    </p>
+                                  )}
+                                </div>
+
+                                <div className="flex items-center justify-end shrink-0">
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      setSiteSettings({
+                                        ...siteSettings,
+                                        [row.enabledKey]: isEnabled ? '0' : '1',
+                                      })
+                                    }
+                                    className={`px-3 py-1.5 rounded-lg text-[11px] font-semibold border cursor-pointer transition-colors ${
+                                      isEnabled
+                                        ? 'bg-emerald-50 border-emerald-200 text-[#00552B] hover:bg-emerald-100'
+                                        : 'bg-white border-slate-200 text-slate-500 hover:bg-slate-50'
+                                    }`}
+                                  >
+                                    {isEnabled ? t('Đang bật', 'Visible') : t('Đang ẩn', 'Hidden')}
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+
+                        {/* Live Footer Social Bar Preview */}
+                        <div className="p-3.5 rounded-xl bg-[#003D25] text-[#F8F5EF] flex flex-wrap items-center justify-between gap-3">
+                          <span className="text-[11px] font-medium text-[#C6A667]">
+                            {t('Xem trước thanh icon mạng xã hội ở Footer:', 'Footer Social Icons Live Preview:')}
+                          </span>
+                          {activePreviewRows.length === 0 ? (
+                            <span className="text-[11px] text-[#F8F5EF]/60 italic">
+                              {t('Tất cả biểu tượng đang ẩn', 'All social icons hidden')}
+                            </span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              {activePreviewRows.map((item) => {
+                                const previewHref = /^https?:\/\//i.test((siteSettings[item.urlKey] || '').trim())
+                                  ? siteSettings[item.urlKey].trim()
+                                  : item.placeholder;
+                                return (
+                                  <a
+                                    key={item.key}
+                                    href={previewHref}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    title={`${item.label}: ${previewHref}`}
+                                    className="w-8 h-8 rounded-full border border-white/15 bg-white/5 text-[#F8F5EF]/85 hover:bg-[#C6A667] hover:text-[#111111] hover:border-[#C6A667] transition-colors flex items-center justify-center"
+                                  >
+                                    {item.icon}
+                                  </a>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Dynamic Order-Total Shipping Rules Setup */}

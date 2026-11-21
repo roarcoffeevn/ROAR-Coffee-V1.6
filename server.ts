@@ -773,16 +773,14 @@ app.post('/api/wallet/topup', requireAuth, (req: AuthedRequest, res) => {
       .run(req.authUser!.userId, amountVnd, bonusPct, bonusVnd, totalCreditVnd, pointsDelta, refCode);
 
     // Notify member that top-up request is pending company bank verification
-    db.prepare(`
-      INSERT INTO user_notifications (user_id, category, title_vi, title_en, body_vi, body_en, link_url)
-      VALUES (?, 'loyalty', ?, ?, ?, ?, '/account?tab=wallet')
-    `).run(
-      req.authUser!.userId,
-      `Đã tiếp nhận yêu cầu nạp Ví ROAR (${refCode})`,
-      `ROAR Wallet top-up request received (${refCode})`,
-      `Yêu cầu nạp ${amountVnd.toLocaleString('vi-VN')}₫ (+${bonusPct}% thưởng = ${totalCreditVnd.toLocaleString('vi-VN')}₫) đang chờ kế toán ROAR xác nhận chuyển khoản.`,
-      `Your ${amountVnd.toLocaleString('en-US')} VND top-up request (+${bonusPct}% bonus) is pending bank transfer verification.`
-    );
+    createUserNotification(req.authUser!.userId, {
+      category: 'loyalty',
+      titleVi: `Đã tiếp nhận yêu cầu nạp Ví ROAR (${refCode})`,
+      titleEn: `ROAR Wallet top-up request received (${refCode})`,
+      messageVi: `Yêu cầu nạp ${amountVnd.toLocaleString('vi-VN')}₫ (+${bonusPct}% thưởng = ${totalCreditVnd.toLocaleString('vi-VN')}₫) đang chờ kế toán ROAR xác nhận chuyển khoản.`,
+      messageEn: `Your ${amountVnd.toLocaleString('en-US')} VND top-up request (+${bonusPct}% bonus) is pending bank transfer verification.`,
+      linkUrl: '/account?tab=wallet',
+    });
 
     const currentUserRow = db.prepare('SELECT wallet_balance_vnd FROM users WHERE id = ?').get(req.authUser!.userId) as any;
     res.json({
@@ -801,52 +799,52 @@ app.post('/api/wallet/topup', requireAuth, (req: AuthedRequest, res) => {
     return;
   }
 
-  // Auto approval mode
-  db.prepare(`
-    INSERT INTO wallet_topup_requests (user_id, amount_vnd, bonus_pct, bonus_vnd, total_credit_vnd, points_delta, reference_code, status, reviewed_at, admin_note)
-    VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', datetime('now'), 'Tự động duyệt')
-  `).run(req.authUser!.userId, amountVnd, bonusPct, bonusVnd, totalCreditVnd, pointsDelta, refCode);
-
-  db.prepare('UPDATE users SET wallet_balance_vnd = wallet_balance_vnd + ? WHERE id = ?').run(
-    totalCreditVnd,
-    req.authUser!.userId
-  );
-
-  db.prepare(`
-    INSERT INTO wallet_transactions (user_id, tx_type, amount_vnd, bonus_vnd, bonus_pct, points_delta, note, reference_code)
-    VALUES (?, 'topup', ?, ?, ?, ?, ?, ?)
-  `).run(
-    req.authUser!.userId,
-    amountVnd,
-    bonusVnd,
-    bonusPct,
-    pointsDelta,
-    `Nạp ví ${amountVnd.toLocaleString('vi-VN')}₫ + Thưởng ${bonusPct}% (${bonusVnd.toLocaleString('vi-VN')}₫)`,
-    refCode
-  );
-
-  if (pointsDelta > 0) {
+  // Auto approval mode (transactional)
+  db.transaction(() => {
     db.prepare(`
-      INSERT INTO points_ledger (user_id, order_id, entry_type, points, description_vi, description_en, expires_at)
-      VALUES (?, NULL, 'earn_available', ?, ?, ?, datetime('now', '+365 days'))
+      INSERT INTO wallet_topup_requests (user_id, amount_vnd, bonus_pct, bonus_vnd, total_credit_vnd, points_delta, reference_code, status, reviewed_at, admin_note)
+      VALUES (?, ?, ?, ?, ?, ?, ?, 'approved', datetime('now'), 'Tự động duyệt')
+    `).run(req.authUser!.userId, amountVnd, bonusPct, bonusVnd, totalCreditVnd, pointsDelta, refCode);
+
+    db.prepare('UPDATE users SET wallet_balance_vnd = wallet_balance_vnd + ? WHERE id = ?').run(
+      totalCreditVnd,
+      req.authUser!.userId
+    );
+
+    db.prepare(`
+      INSERT INTO wallet_transactions (user_id, tx_type, amount_vnd, bonus_vnd, bonus_pct, points_delta, note, reference_code)
+      VALUES (?, 'topup', ?, ?, ?, ?, ?, ?)
     `).run(
       req.authUser!.userId,
+      amountVnd,
+      bonusVnd,
+      bonusPct,
       pointsDelta,
-      `Tích điểm thưởng khi nạp Ví ROAR (${refCode})`,
-      `Reward points earned from ROAR Wallet top-up (${refCode})`
+      `Nạp ví ${amountVnd.toLocaleString('vi-VN')}₫ + Thưởng ${bonusPct}% (${bonusVnd.toLocaleString('vi-VN')}₫)`,
+      refCode
     );
-  }
 
-  db.prepare(`
-    INSERT INTO user_notifications (user_id, category, title_vi, title_en, body_vi, body_en, link_url)
-    VALUES (?, 'loyalty', ?, ?, ?, ?, '/account?tab=wallet')
-  `).run(
-    req.authUser!.userId,
-    `Nạp Ví ROAR thành công +${totalCreditVnd.toLocaleString('vi-VN')}₫`,
-    `ROAR Wallet top-up approved +${totalCreditVnd.toLocaleString('en-US')} VND`,
-    `Tài khoản công ty đã ghi nhận khoản nạp ${amountVnd.toLocaleString('vi-VN')}₫ (+${bonusPct}% thưởng) và cộng +${pointsDelta} điểm thưởng.`,
-    `Your top-up of ${amountVnd.toLocaleString('en-US')} VND (+${bonusPct}% bonus) has been credited with +${pointsDelta} pts.`
-  );
+    if (pointsDelta > 0) {
+      db.prepare(`
+        INSERT INTO points_ledger (user_id, order_id, entry_type, points, description_vi, description_en, expires_at)
+        VALUES (?, NULL, 'earn_available', ?, ?, ?, datetime('now', '+365 days'))
+      `).run(
+        req.authUser!.userId,
+        pointsDelta,
+        `Tích điểm thưởng khi nạp Ví ROAR (${refCode})`,
+        `Reward points earned from ROAR Wallet top-up (${refCode})`
+      );
+    }
+
+    createUserNotification(req.authUser!.userId, {
+      category: 'loyalty',
+      titleVi: `Nạp Ví ROAR thành công +${totalCreditVnd.toLocaleString('vi-VN')}₫`,
+      titleEn: `ROAR Wallet top-up approved +${totalCreditVnd.toLocaleString('en-US')} VND`,
+      messageVi: `Tài khoản công ty đã ghi nhận khoản nạp ${amountVnd.toLocaleString('vi-VN')}₫ (+${bonusPct}% thưởng) và cộng +${pointsDelta} điểm thưởng.`,
+      messageEn: `Your top-up of ${amountVnd.toLocaleString('en-US')} VND (+${bonusPct}% bonus) has been credited with +${pointsDelta} pts.`,
+      linkUrl: '/account?tab=wallet',
+    });
+  })();
 
   const updatedUser = db.prepare('SELECT wallet_balance_vnd FROM users WHERE id = ?').get(req.authUser!.userId) as any;
   res.json({
@@ -863,7 +861,7 @@ app.post('/api/wallet/topup', requireAuth, (req: AuthedRequest, res) => {
   });
 });
 
-app.get('/api/admin/wallet/requests', requireAdmin, (_req, res) => {
+app.get('/api/admin/wallet/requests', requirePermission('customers', 'promotions', 'orders'), (_req, res) => {
   const requests = db
     .prepare(`
       SELECT r.*, u.full_name, u.email, u.member_code
@@ -879,7 +877,7 @@ app.get('/api/admin/wallet/requests', requireAdmin, (_req, res) => {
   });
 });
 
-app.patch('/api/admin/wallet/approval-mode', requireAdmin, (req: AuthedRequest, res) => {
+app.patch('/api/admin/wallet/approval-mode', requirePermission('customers', 'promotions', 'orders'), (req: AuthedRequest, res) => {
   const mode = req.body?.mode === 'auto' ? 'auto' : 'manual';
   db.prepare(
     `INSERT INTO site_settings (key, value) VALUES ('wallet_approval_mode', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`
@@ -887,7 +885,7 @@ app.patch('/api/admin/wallet/approval-mode', requireAdmin, (req: AuthedRequest, 
   res.json({ ok: true, approvalMode: mode });
 });
 
-app.post('/api/admin/wallet/requests/:id/approve', requireAdmin, (req: AuthedRequest, res) => {
+app.post('/api/admin/wallet/requests/:id/approve', requirePermission('customers', 'promotions', 'orders'), (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM wallet_topup_requests WHERE id = ?').get(id) as any;
   if (!row) {
@@ -900,55 +898,63 @@ app.post('/api/admin/wallet/requests/:id/approve', requireAdmin, (req: AuthedReq
   }
   const adminNote = String(req.body?.adminNote || 'Công ty đã xác nhận nhận tiền chuyển khoản').trim();
 
-  db.prepare(
-    `UPDATE wallet_topup_requests SET status = 'approved', admin_note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?`
-  ).run(adminNote, req.authUser!.userId, id);
+  db.transaction(() => {
+    const updatedReq = db.prepare(
+      `UPDATE wallet_topup_requests SET status = 'approved', admin_note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ? AND status = 'pending'`
+    ).run(adminNote, req.authUser!.userId, id);
+    if (updatedReq.changes === 0) return;
 
-  db.prepare('UPDATE users SET wallet_balance_vnd = wallet_balance_vnd + ? WHERE id = ?').run(
-    Number(row.total_credit_vnd),
-    row.user_id
-  );
+    db.prepare('UPDATE users SET wallet_balance_vnd = wallet_balance_vnd + ? WHERE id = ?').run(
+      Number(row.total_credit_vnd),
+      row.user_id
+    );
 
-  db.prepare(`
-    INSERT INTO wallet_transactions (user_id, tx_type, amount_vnd, bonus_vnd, bonus_pct, points_delta, note, reference_code)
-    VALUES (?, 'topup', ?, ?, ?, ?, ?, ?)
-  `).run(
-    row.user_id,
-    row.amount_vnd,
-    row.bonus_vnd,
-    row.bonus_pct,
-    row.points_delta,
-    `Duyệt nạp ví ${Number(row.amount_vnd).toLocaleString('vi-VN')}₫ + Thưởng ${row.bonus_pct}% (${adminNote})`,
-    row.reference_code
-  );
-
-  if (Number(row.points_delta) > 0) {
     db.prepare(`
-      INSERT INTO points_ledger (user_id, order_id, entry_type, points, description_vi, description_en, expires_at)
-      VALUES (?, NULL, 'earn_available', ?, ?, ?, datetime('now', '+365 days'))
+      INSERT INTO wallet_transactions (user_id, tx_type, amount_vnd, bonus_vnd, bonus_pct, points_delta, note, reference_code)
+      VALUES (?, 'topup', ?, ?, ?, ?, ?, ?)
     `).run(
       row.user_id,
+      row.amount_vnd,
+      row.bonus_vnd,
+      row.bonus_pct,
       row.points_delta,
-      `Tích điểm thưởng khi duyệt nạp Ví ROAR (${row.reference_code})`,
-      `Reward points earned from approved ROAR Wallet top-up (${row.reference_code})`
+      `Duyệt nạp ví ${Number(row.amount_vnd).toLocaleString('vi-VN')}₫ + Thưởng ${row.bonus_pct}% (${adminNote})`,
+      row.reference_code
     );
-  }
 
-  db.prepare(`
-    INSERT INTO user_notifications (user_id, category, title_vi, title_en, body_vi, body_en, link_url)
-    VALUES (?, 'loyalty', ?, ?, ?, ?, '/account?tab=wallet')
-  `).run(
-    row.user_id,
-    `Công ty đã nhận tiền! Nạp Ví ROAR thành công +${Number(row.total_credit_vnd).toLocaleString('vi-VN')}₫`,
-    `Bank transfer confirmed! +${Number(row.total_credit_vnd).toLocaleString('en-US')} VND credited`,
-    `ROAR COFFEE đã xác nhận nhận chuyển khoản ${Number(row.amount_vnd).toLocaleString('vi-VN')}₫ (Mã ${row.reference_code}). Ví ROAR đã được cộng ${Number(row.total_credit_vnd).toLocaleString('vi-VN')}₫ (+${row.bonus_pct}% thưởng) và +${row.points_delta} điểm.`,
-    `ROAR COFFEE confirmed your bank transfer (${row.reference_code}). Credited ${Number(row.total_credit_vnd).toLocaleString('en-US')} VND and +${row.points_delta} pts.`
-  );
+    if (Number(row.points_delta) > 0) {
+      db.prepare(`
+        INSERT INTO points_ledger (user_id, order_id, entry_type, points, description_vi, description_en, expires_at)
+        VALUES (?, NULL, 'earn_available', ?, ?, ?, datetime('now', '+365 days'))
+      `).run(
+        row.user_id,
+        row.points_delta,
+        `Tích điểm thưởng khi duyệt nạp Ví ROAR (${row.reference_code})`,
+        `Reward points earned from approved ROAR Wallet top-up (${row.reference_code})`
+      );
+    }
+
+    createUserNotification(row.user_id, {
+      category: 'loyalty',
+      titleVi: `Công ty đã nhận tiền! Nạp Ví ROAR thành công +${Number(row.total_credit_vnd).toLocaleString('vi-VN')}₫`,
+      titleEn: `Bank transfer confirmed! +${Number(row.total_credit_vnd).toLocaleString('en-US')} VND credited`,
+      messageVi: `ROAR COFFEE đã xác nhận nhận chuyển khoản ${Number(row.amount_vnd).toLocaleString('vi-VN')}₫ (Mã ${row.reference_code}). Ví ROAR đã được cộng ${Number(row.total_credit_vnd).toLocaleString('vi-VN')}₫ (+${row.bonus_pct}% thưởng) và +${row.points_delta} điểm.`,
+      messageEn: `ROAR COFFEE confirmed your bank transfer (${row.reference_code}). Credited ${Number(row.total_credit_vnd).toLocaleString('en-US')} VND and +${row.points_delta} pts.`,
+      linkUrl: '/account?tab=wallet',
+    });
+
+    logAudit(req.authUser!.userId, req.authUser!.email, 'APPROVE_WALLET_TOPUP', 'wallet_topup_requests', id, {
+      userId: row.user_id,
+      amountVnd: row.amount_vnd,
+      totalCreditVnd: row.total_credit_vnd,
+      referenceCode: row.reference_code,
+    });
+  })();
 
   res.json({ ok: true });
 });
 
-app.post('/api/admin/wallet/requests/:id/reject', requireAdmin, (req: AuthedRequest, res) => {
+app.post('/api/admin/wallet/requests/:id/reject', requirePermission('customers', 'promotions', 'orders'), (req: AuthedRequest, res) => {
   const id = Number(req.params.id);
   const row = db.prepare('SELECT * FROM wallet_topup_requests WHERE id = ?').get(id) as any;
   if (!row) {
@@ -961,20 +967,26 @@ app.post('/api/admin/wallet/requests/:id/reject', requireAdmin, (req: AuthedRequ
   }
   const adminNote = String(req.body?.adminNote || 'Chưa nhận được chuyển khoản hợp lệ').trim();
 
-  db.prepare(
-    `UPDATE wallet_topup_requests SET status = 'rejected', admin_note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ?`
-  ).run(adminNote, req.authUser!.userId, id);
+  db.transaction(() => {
+    db.prepare(
+      `UPDATE wallet_topup_requests SET status = 'rejected', admin_note = ?, reviewed_by = ?, reviewed_at = datetime('now') WHERE id = ? AND status = 'pending'`
+    ).run(adminNote, req.authUser!.userId, id);
 
-  db.prepare(`
-    INSERT INTO user_notifications (user_id, category, title_vi, title_en, body_vi, body_en, link_url)
-    VALUES (?, 'loyalty', ?, ?, ?, ?, '/account?tab=wallet')
-  `).run(
-    row.user_id,
-    `Yêu cầu nạp Ví ROAR chưa được duyệt (${row.reference_code})`,
-    `ROAR Wallet top-up request declined (${row.reference_code})`,
-    `Yêu cầu nạp ${Number(row.amount_vnd).toLocaleString('vi-VN')}₫ chưa được duyệt. Lý do: ${adminNote}. Vui lòng liên hệ Hotline/Zalo ROAR để được hỗ trợ.`,
-    `Your top-up request (${row.reference_code}) was declined. Reason: ${adminNote}.`
-  );
+    createUserNotification(row.user_id, {
+      category: 'loyalty',
+      titleVi: `Yêu cầu nạp Ví ROAR chưa được duyệt (${row.reference_code})`,
+      titleEn: `ROAR Wallet top-up request declined (${row.reference_code})`,
+      messageVi: `Yêu cầu nạp ${Number(row.amount_vnd).toLocaleString('vi-VN')}₫ chưa được duyệt. Lý do: ${adminNote}. Vui lòng liên hệ Hotline/Zalo ROAR để được hỗ trợ.`,
+      messageEn: `Your top-up request (${row.reference_code}) was declined. Reason: ${adminNote}.`,
+      linkUrl: '/account?tab=wallet',
+    });
+
+    logAudit(req.authUser!.userId, req.authUser!.email, 'REJECT_WALLET_TOPUP', 'wallet_topup_requests', id, {
+      userId: row.user_id,
+      referenceCode: row.reference_code,
+      adminNote,
+    });
+  })();
 
   res.json({ ok: true });
 });
@@ -1065,7 +1077,7 @@ app.post('/api/checkin', requireAuth, (req: AuthedRequest, res) => {
   });
 });
 
-app.get('/api/admin/wallets', requirePermission('promotions'), (_req, res) => {
+app.get('/api/admin/wallets', requirePermission('customers', 'promotions', 'orders'), (_req, res) => {
   const members = db
     .prepare(
       `SELECT id, full_name, email, phone, member_code, tier, role, wallet_balance_vnd, created_at
@@ -1090,7 +1102,7 @@ app.get('/api/admin/wallets', requirePermission('promotions'), (_req, res) => {
   res.json({ members: enriched, transactions });
 });
 
-app.post('/api/admin/wallets/adjust', requirePermission('promotions'), (req: AuthedRequest, res) => {
+app.post('/api/admin/wallets/adjust', requirePermission('customers', 'promotions', 'orders'), (req: AuthedRequest, res) => {
   const userId = Number(req.body?.userId || 0);
   const amountVnd = Math.floor(Number(req.body?.amountVnd || 0));
   const pointsDelta = Math.floor(Number(req.body?.pointsDelta || 0));
@@ -1854,9 +1866,17 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
 });
 
 // ---------- GIFTPOP-STYLE GIFT VOUCHER CHECKOUT & DISPATCH ----------
+function normalizeMemberPhoneKey(raw: string): string {
+  const digits = String(raw || '').replace(/\D/g, '');
+  if (!digits) return '';
+  if (digits.startsWith('84') && digits.length >= 10) return `0${digits.slice(2)}`;
+  return digits;
+}
+
 app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
   const {
     productId,
+    productSlug = '',
     purchaseMode = 'gift',
     deliveryChannel = 'zalo_sms',
     senderName,
@@ -1873,7 +1893,10 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
   const mode = purchaseMode === 'self' ? 'self' : 'gift';
   const channel = deliveryChannel === 'email' ? 'email' : 'zalo_sms';
 
-  const product = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(productId)) as any;
+  let product = db.prepare('SELECT * FROM products WHERE id = ?').get(Number(productId)) as any;
+  if (!product && productSlug) {
+    product = db.prepare('SELECT * FROM products WHERE slug = ?').get(String(productSlug).trim()) as any;
+  }
   if (!product || (product.sub_category !== 'Gift Voucher' && !String(product.slug || '').startsWith('gift-voucher-'))) {
     res.status(404).json({ error: 'Sản phẩm Gift Voucher không tồn tại' });
     return;
@@ -1881,15 +1904,20 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
 
   let authUserRow: any = null;
   if (req.authUser) {
-    authUserRow = db.prepare('SELECT id, full_name, email, phone, wallet_balance_vnd FROM users WHERE id = ?').get(req.authUser.userId);
+    authUserRow = db.prepare('SELECT id, full_name, email, phone, member_code, tier, wallet_balance_vnd FROM users WHERE id = ?').get(req.authUser.userId);
   }
 
   const finalSenderName = String(senderName || authUserRow?.full_name || '').trim();
   const finalSenderEmail = String(senderEmail || authUserRow?.email || '').trim().toLowerCase();
   const finalSenderPhone = String(senderPhone || authUserRow?.phone || '').trim();
+  const senderPhoneKey = normalizeMemberPhoneKey(finalSenderPhone);
 
   if (!finalSenderName || (!finalSenderEmail && !finalSenderPhone)) {
     res.status(400).json({ error: 'Vui lòng nhập họ tên và số điện thoại hoặc email của người mua.' });
+    return;
+  }
+  if (finalSenderEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(finalSenderEmail)) {
+    res.status(400).json({ error: 'Địa chỉ Email người mua không hợp lệ.' });
     return;
   }
 
@@ -1925,6 +1953,108 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
   const finalMethod = allowedMethods.has(String(paymentMethod)) ? String(paymentMethod) : 'vietqr';
 
   const tx = db.transaction(() => {
+    // Check existing member by auth session, email, or normalized phone; auto-register if not a member yet
+    let effectiveUserId: number | null = authUserRow ? Number(authUserRow.id) : null;
+    let isNewMember = false;
+    let matchedExisting = Boolean(authUserRow);
+    let memberRecord: {
+      id: number;
+      email: string;
+      fullName: string;
+      phone: string;
+      memberCode: string;
+      tier: string;
+      welcomePoints: number;
+    } | null = authUserRow
+      ? {
+          id: Number(authUserRow.id),
+          email: authUserRow.email,
+          fullName: authUserRow.full_name,
+          phone: authUserRow.phone || '',
+          memberCode: authUserRow.member_code,
+          tier: authUserRow.tier,
+          welcomePoints: 0,
+        }
+      : null;
+
+    if (!effectiveUserId) {
+      let existingUser: any = null;
+      if (finalSenderEmail) {
+        existingUser = db
+          .prepare('SELECT id, email, full_name, phone, member_code, tier FROM users WHERE LOWER(TRIM(email)) = ?')
+          .get(finalSenderEmail);
+      }
+      if (!existingUser && senderPhoneKey.length >= 8) {
+        const candidates = db
+          .prepare("SELECT id, email, full_name, phone, member_code, tier FROM users WHERE phone IS NOT NULL AND TRIM(phone) != ''")
+          .all() as any[];
+        existingUser = candidates.find((u) => normalizeMemberPhoneKey(u.phone) === senderPhoneKey) || null;
+      }
+
+      if (existingUser) {
+        effectiveUserId = Number(existingUser.id);
+        matchedExisting = true;
+        memberRecord = {
+          id: Number(existingUser.id),
+          email: existingUser.email,
+          fullName: existingUser.full_name,
+          phone: existingUser.phone || '',
+          memberCode: existingUser.member_code,
+          tier: existingUser.tier,
+          welcomePoints: 0,
+        };
+      } else {
+        // Not a member yet -> automatically create a brand-new ROAR Member account
+        let memberCode = `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const existsCode = db.prepare('SELECT id FROM users WHERE member_code = ?').get(memberCode);
+          if (!existsCode) break;
+          memberCode = `RC-MEM-${Math.floor(100000 + Math.random() * 900000)}`;
+        }
+        const memberEmail =
+          finalSenderEmail || `${senderPhoneKey || `guest${Date.now()}`}@member.roarcoffee.vn`;
+        const randomPasswordHash = hashPassword(crypto.randomBytes(24).toString('hex'));
+        const newUserInsert = db
+          .prepare(`
+            INSERT INTO users (email, password_hash, full_name, phone, role, member_code, tier, email_verified)
+            VALUES (?, ?, ?, ?, 'customer', ?, 'ROAR Member', 0)
+          `)
+          .run(memberEmail, randomPasswordHash, finalSenderName, finalSenderPhone, memberCode);
+        effectiveUserId = Number(newUserInsert.lastInsertRowid);
+        isNewMember = true;
+
+        const welcomePts = 50;
+        db.prepare(`
+          INSERT INTO points_ledger (user_id, entry_type, points, description_vi, description_en)
+          VALUES (?, 'earn_available', ?, ?, ?)
+        `).run(
+          effectiveUserId,
+          welcomePts,
+          'Quà chào mừng thành viên mới ROAR CLUB khi đặt E-Voucher',
+          'ROAR CLUB welcome bonus points on first E-Voucher order'
+        );
+
+        createUserNotification(effectiveUserId, {
+          titleVi: `Chào mừng ${finalSenderName} gia nhập ROAR CLUB!`,
+          titleEn: `Welcome ${finalSenderName} to ROAR CLUB!`,
+          messageVi: `Tài khoản thành viên ${memberCode} đã được khởi tạo tự động kèm ${welcomePts} điểm thưởng chào mừng.`,
+          messageEn: `Your ROAR Member account (${memberCode}) is now active with ${welcomePts} welcome points.`,
+          category: 'loyalty',
+          linkUrl: '/account?tab=vouchers',
+        });
+
+        memberRecord = {
+          id: effectiveUserId,
+          email: memberEmail,
+          fullName: finalSenderName,
+          phone: finalSenderPhone,
+          memberCode,
+          tier: 'ROAR Member',
+          welcomePoints: welcomePts,
+        };
+      }
+    }
+
     const unitPriceVnd = Number(product.price_vnd || 0);
     const qty = normalizedRecipients.length;
     const subtotal = unitPriceVnd * qty;
@@ -2017,6 +2147,9 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
       .filter(Boolean)
       .join(' | ');
 
+    const resolvedOrderEmail =
+      finalSenderEmail || memberRecord?.email || `${senderPhoneKey || 'guest'}@member.roarcoffee.vn`;
+
     const orderInsert = db
       .prepare(`
         INSERT INTO orders (
@@ -2027,10 +2160,10 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
       `)
       .run(
         orderNumber,
-        req.authUser ? req.authUser.userId : null,
+        effectiveUserId,
         finalSenderName,
-        finalSenderEmail || `${finalSenderPhone.replace(/\D/g, '') || 'guest'}@evoucher.roarcoffee.vn`,
-        finalSenderPhone || finalSenderEmail,
+        resolvedOrderEmail,
+        finalSenderPhone || resolvedOrderEmail,
         shippingSummary,
         subtotal,
         discountAmount,
@@ -2093,9 +2226,9 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
         voucherCode,
         mode,
         channel,
-        req.authUser ? req.authUser.userId : null,
+        effectiveUserId,
         finalSenderName,
-        finalSenderEmail,
+        resolvedOrderEmail,
         finalSenderPhone,
         r.name,
         r.contact,
@@ -2123,8 +2256,8 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
       });
     }
 
-    if (req.authUser) {
-      createUserNotification(req.authUser.userId, {
+    if (effectiveUserId) {
+      createUserNotification(effectiveUserId, {
         titleVi: dispatchStatus === 'active' ? `Đã kích hoạt ${qty} E-Voucher (${orderNumber})` : `Đã tạo đơn E-Voucher ${orderNumber}`,
         titleEn: dispatchStatus === 'active' ? `Activated ${qty} E-Voucher(s) (${orderNumber})` : `Gift Voucher order ${orderNumber} created`,
         messageVi:
@@ -2152,16 +2285,51 @@ app.post('/api/gift-vouchers/checkout', (req: AuthedRequest, res) => {
         paymentMethod: finalMethod,
         paymentStatus: initialPaymentStatus,
         orderStatus: initialOrderStatus,
-        customerEmail: finalSenderEmail || `${finalSenderPhone.replace(/\D/g, '') || 'guest'}@evoucher.roarcoffee.vn`,
+        customerEmail: resolvedOrderEmail,
         customerPhone: finalSenderPhone,
       },
       dispatches: maskGiftDispatches(dispatches),
+      membership: memberRecord
+        ? {
+            isNewMember,
+            matchedExisting,
+            memberCode: memberRecord.memberCode,
+            tier: memberRecord.tier,
+            fullName: memberRecord.fullName,
+            email: isNewMember ? memberRecord.email : undefined,
+            phone: isNewMember ? memberRecord.phone : undefined,
+            welcomePoints: isNewMember ? memberRecord.welcomePoints : 0,
+          }
+        : { isNewMember: false, matchedExisting: false },
+      newMemberRecord: isNewMember ? memberRecord : null,
     };
   });
 
   try {
     const result = tx();
-    res.status(201).json({ ok: true, ...result });
+    let authPayload: { token: string; user: any } | undefined;
+    if (result.newMemberRecord) {
+      const m = result.newMemberRecord;
+      const token = signSessionToken({ userId: m.id, email: m.email, role: 'customer' });
+      setSessionCookie(req, res, token);
+      authPayload = {
+        token,
+        user: {
+          id: m.id,
+          email: m.email,
+          fullName: m.fullName,
+          phone: m.phone,
+          role: 'customer',
+          memberCode: m.memberCode,
+          tier: m.tier,
+          emailVerified: false,
+          points: { available: m.welcomePoints, pending: 0, redeemed: 0, expired: 0, expiringSoon: 0 },
+          walletBalanceVnd: 0,
+        },
+      };
+    }
+    const { newMemberRecord: _omit, ...publicPayload } = result;
+    res.status(201).json({ ok: true, ...publicPayload, ...(authPayload ? { auth: authPayload } : {}) });
   } catch (err: any) {
     res.status(400).json({ error: err.message || 'Không thể khởi tạo đơn Gift Voucher.' });
   }
@@ -3619,10 +3787,18 @@ app.get('/api/admin/settings', requirePermission('settings'), (_req, res) => {
 });
 
 app.patch('/api/admin/settings', requirePermission('settings'), (req: AuthedRequest, res) => {
-  const updates = req.body || {};
+  const updates = (req.body || {}) as Record<string, unknown>;
+  const urlKeys = new Set(['facebook_url', 'instagram_url', 'tiktok_url', 'youtube_url', 'zalo_url']);
   const upsert = db.prepare('INSERT INTO site_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
-  for (const [k, v] of Object.entries(updates)) {
-    upsert.run(k, String(v));
+  for (const [k, rawVal] of Object.entries(updates)) {
+    let val = String(rawVal ?? '').trim();
+    if (urlKeys.has(k) && val) {
+      if (!/^https?:\/\//i.test(val)) {
+        res.status(400).json({ error: `Liên kết ${k} phải bắt đầu bằng https:// hoặc http://` });
+        return;
+      }
+    }
+    upsert.run(k, val);
   }
   logAudit(req.authUser!.userId, req.authUser!.email, 'UPDATE_SITE_SETTINGS', 'site_settings', 'global', updates);
   scheduleSnapshotSync(db);

@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
+  Award,
   BookUser,
   Check,
   CheckCircle2,
@@ -14,7 +15,6 @@ import {
   MessageSquareHeart,
   Minus,
   Plus,
-  QrCode,
   RefreshCw,
   Send,
   Smartphone,
@@ -59,6 +59,17 @@ interface GiftDispatchItem {
   expires_at: string;
 }
 
+interface CheckoutMembershipInfo {
+  isNewMember: boolean;
+  matchedExisting?: boolean;
+  memberCode?: string;
+  tier?: string;
+  fullName?: string;
+  email?: string;
+  phone?: string;
+  welcomePoints?: number;
+}
+
 interface CheckoutResult {
   order: {
     orderId: number;
@@ -75,6 +86,8 @@ interface CheckoutResult {
     customerPhone: string;
   };
   dispatches: GiftDispatchItem[];
+  membership?: CheckoutMembershipInfo;
+  auth?: { token: string; user: any };
 }
 
 function buildDeterministicQRMatrix(seedText: string, size = 21): boolean[][] {
@@ -213,7 +226,7 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
   onClose,
 }) => {
   const { lang, t, localePath } = useI18n();
-  const { user, apiFetch, formatPrice, refreshUser, showToast } = useStore();
+  const { user, apiFetch, formatPrice, refreshUser, setAuthSession, showToast } = useStore();
 
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(initialProduct);
@@ -252,10 +265,13 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
   const [txRef, setTxRef] = useState('');
   const [confirmingTx, setConfirmingTx] = useState(false);
   const [paymentSubmittedNote, setPaymentSubmittedNote] = useState(false);
+  const [showNewMemberPopup, setShowNewMemberPopup] = useState(false);
   const [checkingCodeStatus, setCheckingCodeStatus] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
 
   const wasOpenRef = useRef(false);
+  const userRef = useRef(user);
+  userRef.current = user;
 
   // Initialize / Reset ONLY when modal transitions from closed -> open
   useEffect(() => {
@@ -265,6 +281,7 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
     }
     if (wasOpenRef.current || !initialProduct) return;
     wasOpenRef.current = true;
+    const curUser = userRef.current;
     setSelectedProduct(initialProduct);
     setPurchaseMode(initialMode);
     setDeliveryChannel('zalo_sms');
@@ -285,12 +302,13 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
     setCountdownSec(900);
     setTxRef('');
     setPaymentSubmittedNote(false);
+    setShowNewMemberPopup(false);
     setShowAddressBook(false);
     setShowHowTo(false);
-    setSenderName(user?.fullName || '');
-    setSenderPhone(user?.phone || '');
-    setSenderEmail(user?.email || '');
-  }, [isOpen, initialProduct, initialMode, user]);
+    setSenderName(curUser?.fullName || '');
+    setSenderPhone(curUser?.phone || '');
+    setSenderEmail(curUser?.email || '');
+  }, [isOpen, initialProduct, initialMode]);
 
   // Esc key close handler
   useEffect(() => {
@@ -495,6 +513,7 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           productId: selectedProduct.id,
+          productSlug: selectedProduct.slug,
           purchaseMode,
           deliveryChannel,
           senderName: senderName.trim(),
@@ -518,8 +537,13 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
       setTxRef('');
       setCountdownSec(900);
       setStep(3);
-      if (user) {
+      if (d.auth?.user && d.auth?.token) {
+        setAuthSession(d.auth.user, d.auth.token);
+      } else if (user) {
         refreshUser();
+      }
+      if (d.order?.paymentStatus === 'paid' && d.membership?.isNewMember) {
+        setShowNewMemberPopup(true);
       }
     } finally {
       setSubmitting(false);
@@ -551,6 +575,9 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
       });
       if (res.ok) {
         setPaymentSubmittedNote(true);
+        if (checkoutResult.membership?.isNewMember) {
+          setShowNewMemberPopup(true);
+        }
         showToast(t('Thanh toán hoàn tất! Vui lòng đợi hệ thống gửi Code E-Voucher.', 'Payment confirmed! Please wait for your E-Voucher code.'));
       } else {
         showToast(t('Không thể ghi nhận xác nhận lúc này. Vui lòng thử lại.', 'Unable to log payment confirmation. Please retry.'));
@@ -1601,6 +1628,7 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
                     onClick={() => {
                       setCheckoutResult(null);
                       setPaymentSubmittedNote(false);
+                      setShowNewMemberPopup(false);
                       setTxRef('');
                       setStepError('');
                       setStep(1);
@@ -1622,6 +1650,120 @@ export const GiftVoucherModal: React.FC<GiftVoucherModalProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Celebratory Popup for Newly Created ROAR Club Members */}
+      {showNewMemberPopup && checkoutResult?.membership?.isNewMember && (
+        <div
+          className="fixed inset-0 z-[60] bg-black/65 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={(e) => {
+            e.stopPropagation();
+            setShowNewMemberPopup(false);
+          }}
+          role="dialog"
+          aria-modal="true"
+          aria-label={t('Chào mừng thành viên mới ROAR CLUB', 'Welcome New ROAR CLUB Member')}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-[#131E18] text-[#202020] dark:text-[#F1EFEA] border border-[#C6A667]/50 shadow-2xl overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="bg-gradient-to-br from-[#004624] via-[#00552B] to-[#0B2217] text-white p-6 text-center relative">
+              <button
+                type="button"
+                onClick={() => setShowNewMemberPopup(false)}
+                aria-label={t('Đóng thông báo', 'Close welcome modal')}
+                className="absolute right-3.5 top-3.5 w-8 h-8 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+              <div className="w-14 h-14 rounded-full bg-[#C6A667] text-[#111111] flex items-center justify-center mx-auto mb-3 shadow-lg">
+                <Award className="w-7 h-7" />
+              </div>
+              <p className="text-[11px] font-mono uppercase tracking-[0.2em] text-[#C6A667] font-bold">
+                {t('CHÀO MỪNG THÀNH VIÊN MỚI · ROAR CLUB', 'WELCOME NEW MEMBER · ROAR CLUB')}
+              </p>
+              <h3 className="text-xl font-bold mt-1.5 leading-snug">
+                {t(
+                  `Chúc mừng ${checkoutResult.membership.fullName || senderName} đã là Thành viên ROAR!`,
+                  `Congratulations ${checkoutResult.membership.fullName || senderName} on joining ROAR CLUB!`
+                )}
+              </h3>
+              <p className="text-xs text-white/85 mt-1.5 leading-relaxed">
+                {t(
+                  'Hệ thống đã tự động khởi tạo thẻ thành viên của bạn qua số điện thoại / email đặt hàng cùng quà chào mừng.',
+                  'Your membership card has been automatically created using your contact details with a welcome reward.'
+                )}
+              </p>
+            </div>
+
+            <div className="p-5 space-y-4">
+              <div className="rounded-xl bg-[#FAF8F4] dark:bg-[#0E1512] border border-[#C6A667]/35 p-3.5 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[#202020]/65 dark:text-[#F1EFEA]/65">{t('Mã thành viên:', 'Member Code:')}</span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      copyText(
+                        'new-member-code',
+                        checkoutResult.membership?.memberCode || '',
+                        t('Đã sao chép mã thành viên!', 'Member code copied!')
+                      )
+                    }
+                    className="inline-flex items-center gap-1.5 font-mono font-bold text-sm text-[#00552B] dark:text-[#C6A667] cursor-pointer"
+                  >
+                    <span>{checkoutResult.membership.memberCode}</span>
+                    {copiedId === 'new-member-code' ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[#202020]/65 dark:text-[#F1EFEA]/65">{t('Hạng thành viên:', 'Tier:')}</span>
+                  <span className="font-bold text-[#00552B] dark:text-[#C6A667]">
+                    {checkoutResult.membership.tier || 'ROAR Member'}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#202020]/10 dark:border-white/10">
+                  <span className="text-[#202020]/65 dark:text-[#F1EFEA]/65">{t('Quà tặng chào mừng:', 'Welcome Gift:')}</span>
+                  <span className="inline-flex items-center gap-1 font-mono font-bold text-[#00552B] dark:text-[#C6A667] tabular-nums">
+                    <Sparkles className="w-3.5 h-3.5 text-[#C6A667]" />
+                    +{checkoutResult.membership.welcomePoints || 50} {t('Điểm ROAR', 'ROAR Points')}
+                  </span>
+                </div>
+              </div>
+
+              <ul className="space-y-1.5 text-xs text-[#202020]/80 dark:text-[#F1EFEA]/80">
+                <li className="flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#00552B] dark:text-[#C6A667] shrink-0 mt-0.5" />
+                  <span>{t('Tích lũy điểm ROAR và theo dõi mã E-Voucher ngay trong Ví Voucher của tôi.', 'Earn ROAR points and manage E-Vouchers anytime in My Vouchers.')}</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-[#00552B] dark:text-[#C6A667] shrink-0 mt-0.5" />
+                  <span>{t('Nhận ưu đãi độc quyền & mã giảm giá dành riêng cho thành viên ROAR.', 'Unlock member-only deals and birthday rewards.')}</span>
+                </li>
+              </ul>
+
+              <div className="flex flex-col sm:flex-row gap-2 pt-1">
+                <Link
+                  to={localePath('/account?tab=vouchers')}
+                  onClick={() => {
+                    setShowNewMemberPopup(false);
+                    onClose();
+                  }}
+                  className="flex-1 py-2.5 px-4 rounded-full bg-[#00552B] hover:bg-[#003D25] text-white text-xs font-bold text-center transition-colors"
+                >
+                  {t('Xem Ví Voucher & Quyền lợi →', 'View My Vouchers & Perks →')}
+                </Link>
+                <button
+                  type="button"
+                  onClick={() => setShowNewMemberPopup(false)}
+                  className="py-2.5 px-4 rounded-full border border-[#202020]/20 dark:border-white/20 text-xs font-semibold hover:bg-black/5 dark:hover:bg-white/5 cursor-pointer"
+                >
+                  {t('Tuyệt vời, Xem đơn hàng', 'Awesome, View Order')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
