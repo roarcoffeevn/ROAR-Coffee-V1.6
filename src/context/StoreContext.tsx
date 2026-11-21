@@ -350,14 +350,29 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, []);
 
   const refreshUser = useCallback(async (overrideToken?: string | null) => {
+    const headers = new Headers();
+    const token = overrideToken ?? authToken ?? safeGetStorage('roar_auth_token');
+    if (token) headers.set('Authorization', `Bearer ${token}`);
     try {
-      const headers = new Headers();
-      const token = overrideToken ?? authToken ?? safeGetStorage('roar_auth_token');
-      if (token) headers.set('Authorization', `Bearer ${token}`);
-      const res = await fetch('/api/auth/me', { credentials: 'include', headers });
+      let res = await fetch('/api/auth/me', { credentials: 'include', headers });
+      const ct = res.headers.get('content-type') || '';
+      if (!ct.includes('application/json')) {
+        const fallback = await handleStaticApiFallback('/api/auth/me', { method: 'GET', headers });
+        if (fallback) res = fallback;
+      }
       const data = await res.json();
       setUser(data.user || null);
     } catch {
+      try {
+        const fallback = await handleStaticApiFallback('/api/auth/me', { method: 'GET', headers });
+        if (fallback) {
+          const data = await fallback.json();
+          setUser(data.user || null);
+          return;
+        }
+      } catch {
+        // silent
+      }
       setUser(null);
     }
   }, [authToken]);

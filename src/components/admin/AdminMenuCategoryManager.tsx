@@ -302,7 +302,7 @@ export const AdminMenuCategoryManager: React.FC<AdminMenuCategoryManagerProps> =
       const res = await apiFetch('/api/admin/settings', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings: payload }),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         onSaved?.({ ...settings, ...payload });
@@ -314,7 +314,8 @@ export const AdminMenuCategoryManager: React.FC<AdminMenuCategoryManagerProps> =
           )
         );
       } else {
-        showToast(t('Không thể lưu cài đặt menu.', 'Failed to save menu settings.'));
+        const d = await res.json().catch(() => ({}));
+        showToast(d.error || t('Không thể lưu cài đặt menu.', 'Failed to save menu settings.'));
       }
     } finally {
       setSaving(false);

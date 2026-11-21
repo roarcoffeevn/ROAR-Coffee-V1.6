@@ -3787,11 +3787,17 @@ app.get('/api/admin/settings', requirePermission('settings'), (_req, res) => {
 });
 
 app.patch('/api/admin/settings', requirePermission('settings'), (req: AuthedRequest, res) => {
-  const updates = (req.body || {}) as Record<string, unknown>;
+  const rawBody = (req.body || {}) as Record<string, unknown>;
+  const updates = (
+    rawBody.settings && typeof rawBody.settings === 'object' && !Array.isArray(rawBody.settings)
+      ? rawBody.settings
+      : rawBody
+  ) as Record<string, unknown>;
   const urlKeys = new Set(['facebook_url', 'instagram_url', 'tiktok_url', 'youtube_url', 'zalo_url']);
   const upsert = db.prepare('INSERT INTO site_settings (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value');
   for (const [k, rawVal] of Object.entries(updates)) {
-    let val = String(rawVal ?? '').trim();
+    if (rawVal && typeof rawVal === 'object') continue;
+    const val = String(rawVal ?? '').trim();
     if (urlKeys.has(k) && val) {
       if (!/^https?:\/\//i.test(val)) {
         res.status(400).json({ error: `Liên kết ${k} phải bắt đầu bằng https:// hoặc http://` });

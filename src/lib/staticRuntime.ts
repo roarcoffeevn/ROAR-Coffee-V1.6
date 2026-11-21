@@ -330,7 +330,7 @@ export async function handleStaticApiFallback(
     const password = String(body.password || '');
     let found = state.users.find((u) => u.email.toLowerCase() === email && u.password === password);
     // Also accept backend default credentials on static hosts (even if localStorage had older defaults)
-    if (!found && email === 'admin@roarcoffee.vn' && (password === 'Admin@Roar2026!' || password === 'RoarAdmin2026!')) {
+    if (!found && email === 'admin@roarcoffee.vn' && (password === 'Admin@Roar2026!' || password === 'RoarAdmin2026!' || password === 'RoarAdmin!2026')) {
       found = state.users.find((u) => u.email.toLowerCase() === 'admin@roarcoffee.vn');
     }
     if (!found && email === 'member@roarcoffee.vn' && (password === 'Member@Roar2026!' || password === 'RoarMember2026!')) {
@@ -354,7 +354,7 @@ export async function handleStaticApiFallback(
         writeState(state);
       }
     }
-    if (!found && email === 'editor@roarcoffee.vn' && password === 'Editor@Roar2026!') {
+    if (!found && email === 'editor@roarcoffee.vn' && (password === 'Editor@Roar2026!' || password === 'RoarEditor!2026')) {
       found = state.users.find((u) => u.email.toLowerCase() === 'editor@roarcoffee.vn');
       if (!found) {
         found = {
@@ -1014,8 +1014,68 @@ export async function handleStaticApiFallback(
       }));
       return jsonResponse({ products: list });
     }
+    if (pathname.startsWith('/api/admin/products/') && method === 'PATCH') {
+      const id = Number(pathname.split('/').pop());
+      state.productsOverlay[id] = { ...(state.productsOverlay[id] || {}), ...body };
+      writeState(state);
+      return jsonResponse({ ok: true });
+    }
     if (pathname === '/api/admin/orders' && method === 'GET') {
       return jsonResponse({ orders: state.orders });
+    }
+    if (/^\/api\/admin\/orders\/\d+$/.test(pathname) && method === 'PATCH') {
+      const id = Number(pathname.split('/').pop());
+      const order = state.orders.find((o) => Number(o.id) === id);
+      if (!order) {
+        return jsonResponse({ error: 'Không tìm thấy đơn hàng.' }, 404);
+      }
+
+      const prevStatus = order.order_status || 'Pending';
+      const nextStatus = body.orderStatus || prevStatus;
+      const nextPayment = body.paymentStatus || order.payment_status || 'awaiting_payment';
+      const nextTracking =
+        body.trackingCode !== undefined ? String(body.trackingCode).trim() : order.tracking_code || '';
+      const cleanResolution = typeof body.resolutionNote === 'string' ? body.resolutionNote.trim() : '';
+      const nextNotes = cleanResolution
+        ? `${order.notes ? `${order.notes}\n` : ''}[Xử lý ${new Date().toISOString().slice(0, 16).replace('T', ' ')}] ${cleanResolution}`
+        : order.notes || '';
+
+      order.order_status = nextStatus;
+      order.payment_status = nextPayment;
+      order.tracking_code = nextTracking;
+      order.notes = nextNotes;
+      order.updated_at = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+      if (Array.isArray(order.gift_dispatches)) {
+        if (nextPayment === 'paid' && nextStatus !== 'Cancelled' && nextStatus !== 'Returned') {
+          order.gift_dispatches = order.gift_dispatches.map((d: any) =>
+            d.status === 'pending_payment' ? { ...d, status: 'active' } : d
+          );
+        } else if (nextStatus === 'Cancelled' || nextStatus === 'Returned') {
+          order.gift_dispatches = order.gift_dispatches.map((d: any) =>
+            d.status === 'pending_payment' || d.status === 'active' ? { ...d, status: 'cancelled' } : d
+          );
+        }
+      }
+
+      if (order.user_id && nextStatus === 'Completed' && !order.points_awarded) {
+        const netEligible = Math.max(0, Number(order.subtotal || 0) - Number(order.discount_amount || 0) - Number(order.points_discount || 0));
+        const pts = Math.floor(netEligible / 10000);
+        if (pts > 0) {
+          const buyer = state.users.find((usr) => usr.id === Number(order.user_id));
+          if (buyer) buyer.points = (buyer.points ?? 0) + pts;
+        }
+        order.points_awarded = pts;
+      }
+
+      if (order.user_id && (nextStatus === 'Cancelled' || nextStatus === 'Returned') && Number(order.points_awarded || 0) > 0) {
+        const buyer = state.users.find((usr) => usr.id === Number(order.user_id));
+        if (buyer) buyer.points = Math.max(0, (buyer.points ?? 0) - Number(order.points_awarded || 0));
+        order.points_awarded = 0;
+      }
+
+      writeState(state);
+      return jsonResponse({ ok: true, order });
     }
     if (pathname === '/api/admin/customers' && method === 'GET') {
       return jsonResponse({
@@ -1051,6 +1111,27 @@ export async function handleStaticApiFallback(
         },
       });
     }
+    if (/^\/api\/admin\/customers\/\d+$/.test(pathname) && method === 'PATCH') {
+      const id = Number(pathname.split('/').pop());
+      const target = state.users.find((x) => x.id === id);
+      if (!target) return jsonResponse({ error: 'Không tìm thấy thành viên.' }, 404);
+      if (body.tier) target.tier = String(body.tier);
+      if (Number.isFinite(Number(body.pointsDelta)) && Number(body.pointsDelta) !== 0) {
+        target.points = Math.max(0, (target.points ?? 0) + Number(body.pointsDelta));
+      }
+      writeState(state);
+      return jsonResponse({ ok: true });
+    }
+    if (/^\/api\/admin\/customers\/(\d+|all)\/notify$/.test(pathname) && method === 'POST') {
+      const targetParam = pathname.split('/')[4];
+      const sentCount = targetParam === 'all' ? state.users.length : 1;
+      return jsonResponse({ ok: true, sentCount });
+    }
+    if (pathname === '/api/admin/loyalty-settings' && method === 'PATCH') {
+      state.settingsOverlay._loyalty_settings = JSON.stringify(body || {});
+      writeState(state);
+      return jsonResponse({ ok: true });
+    }
     if (pathname === '/api/admin/b2b' && method === 'GET') {
       return jsonResponse({ inquiries: state.b2bInquiries });
     }
@@ -1085,7 +1166,59 @@ export async function handleStaticApiFallback(
       return jsonResponse({ ok: true });
     }
     if (pathname === '/api/admin/promotions' && method === 'GET') {
-      return jsonResponse({ promotions: snap?.tables?.promotions || [] });
+      const base = snap?.tables?.promotions || [];
+      const custom = state.settingsOverlay._promotions ? JSON.parse(state.settingsOverlay._promotions) : null;
+      return jsonResponse({ promotions: Array.isArray(custom) ? custom : base });
+    }
+    if (pathname === '/api/admin/promotions' && method === 'POST') {
+      const base = snap?.tables?.promotions || [];
+      const current = state.settingsOverlay._promotions ? JSON.parse(state.settingsOverlay._promotions) : [...base];
+      const newPromo = {
+        id: Date.now(),
+        code: String(body.code || '').trim().toUpperCase(),
+        title_vi: String(body.title_vi || ''),
+        title_en: String(body.title_en || body.title_vi || ''),
+        description_vi: String(body.title_vi || ''),
+        description_en: String(body.title_en || body.title_vi || ''),
+        promo_type: 'code',
+        discount_type: body.discount_type || 'percent',
+        discount_value: Number(body.discount_value || 10),
+        max_discount: 0,
+        min_order_value: 0,
+        eligible_category: 'all',
+        start_date: body.start_date || '2026-01-01',
+        end_date: body.end_date || '2027-12-31',
+        usage_limit: 1000,
+        used_count: 0,
+        per_customer_limit: 1,
+        combinable: 0,
+        member_only: 0,
+        min_tier: '',
+        terms_vi: '',
+        terms_en: '',
+        active: 1,
+      };
+      current.unshift(newPromo);
+      state.settingsOverlay._promotions = JSON.stringify(current);
+      writeState(state);
+      return jsonResponse({ ok: true, id: newPromo.id }, 201);
+    }
+    if (/^\/api\/admin\/promotions\/\d+$/.test(pathname) && method === 'PATCH') {
+      const id = Number(pathname.split('/').pop());
+      const base = snap?.tables?.promotions || [];
+      const current = state.settingsOverlay._promotions ? JSON.parse(state.settingsOverlay._promotions) : [...base];
+      const next = current.map((p: any) => (p.id === id ? { ...p, ...body } : p));
+      state.settingsOverlay._promotions = JSON.stringify(next);
+      writeState(state);
+      return jsonResponse({ ok: true });
+    }
+    if (/^\/api\/admin\/promotions\/\d+$/.test(pathname) && method === 'DELETE') {
+      const id = Number(pathname.split('/').pop());
+      const base = snap?.tables?.promotions || [];
+      const current = state.settingsOverlay._promotions ? JSON.parse(state.settingsOverlay._promotions) : [...base];
+      state.settingsOverlay._promotions = JSON.stringify(current.filter((p: any) => p.id !== id));
+      writeState(state);
+      return jsonResponse({ ok: true });
     }
     if (pathname === '/api/admin/settings' && method === 'GET') {
       const settings: Record<string, string> = {};
@@ -1093,7 +1226,15 @@ export async function handleStaticApiFallback(
       return jsonResponse({ settings: { ...settings, ...state.settingsOverlay } });
     }
     if (pathname === '/api/admin/settings' && method === 'PATCH') {
-      Object.assign(state.settingsOverlay, body.settings || {});
+      const payload = (body && typeof body.settings === 'object' ? body.settings : body) || {};
+      const urlKeys = new Set(['facebook_url', 'instagram_url', 'tiktok_url', 'youtube_url', 'zalo_url']);
+      for (const [k, rawVal] of Object.entries(payload)) {
+        const val = String(rawVal ?? '').trim();
+        if (urlKeys.has(k) && val && !/^https?:\/\//i.test(val)) {
+          return jsonResponse({ error: `Liên kết ${k} phải bắt đầu bằng https:// hoặc http://` }, 400);
+        }
+        state.settingsOverlay[k] = val;
+      }
       writeState(state);
       return jsonResponse({ ok: true });
     }

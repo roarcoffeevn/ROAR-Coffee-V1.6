@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { ArrowRight, Award, ChevronDown, ChevronLeft, ChevronRight, Compass, Flame, Gift, Globe2, PackageCheck, Pause, Play, ShoppingBag } from 'lucide-react';
 import { AdaptiveLogo } from '../components/AdaptiveLogo';
@@ -8,128 +8,21 @@ import { useI18n } from '../i18n/I18nContext';
 import { type Product, useStore } from '../context/StoreContext';
 import { localizeCoffeeType, localizeJournalCategory } from '../lib/i18nHelpers';
 import { getPromoVoucherImage } from '../lib/media';
+import { parseHeroMetrics, parseHeroSlides } from '../lib/heroBanners';
 import { fetchJournalWithFallback, fetchProductsWithFallback, fetchPromotionsWithFallback } from '../lib/staticFallback';
-
-interface HeroSlide {
-  id: string;
-  imageKey: string;
-  badgeVi: string;
-  badgeEn: string;
-  titleVi: string;
-  titleEn: string;
-  descVi: string;
-  descEn: string;
-  captionVi: string;
-  captionEn: string;
-  primaryCtaVi: string;
-  primaryCtaEn: string;
-  primaryTo: string;
-  secondaryCtaVi: string;
-  secondaryCtaEn: string;
-  secondaryTo: string;
-  tabLabelVi: string;
-  tabLabelEn: string;
-  surfaceClass: string;
-}
-
-const HERO_SLIDES: HeroSlide[] = [
-  {
-    id: 'flagship',
-    imageKey: 'hero_roar_coffee',
-    badgeVi: 'Thương hiệu Cà phê Việt Nam Cao Cấp',
-    badgeEn: 'Distinctive Vietnamese Coffee Brand',
-    titleVi: 'KHƠI BẢN LĨNH. ĐẬM CHẤT RIÊNG.',
-    titleEn: 'IGNITING COURAGE. DEFINING CHARACTER.',
-    descVi:
-      'Kết tinh vùng nguyên liệu Việt Nam đích thực, nghệ thuật rang xay tinh tuyển, 7 cá tính thương hiệu riêng biệt và nền tảng thương mại cà phê nhân xanh S14/S16/S18 chuẩn quốc tế.',
-    descEn:
-      'Uniting authentic Vietnamese coffee origins, disciplined roast craftsmanship, seven distinctive brand personalities, and a commercial S14/S16/S18 green coffee portal.',
-    captionVi: 'Hình ảnh minh họa nghệ thuật pha Phin Việt Nam — KHƠI BẢN LĨNH. ĐẬM CHẤT RIÊNG.',
-    captionEn: 'Editorial concept of Vietnamese Phin extraction — IGNITING COURAGE. DEFINING CHARACTER.',
-    primaryCtaVi: 'Khám phá cà phê',
-    primaryCtaEn: 'Explore Coffee',
-    primaryTo: '/shop',
-    secondaryCtaVi: 'Trở thành đối tác',
-    secondaryCtaEn: 'Become a Partner',
-    secondaryTo: '/partners',
-    tabLabelVi: '01 · Bản sắc ROAR',
-    tabLabelEn: '01 · ROAR Identity',
-    surfaceClass: 'bg-[#003D25]',
-  },
-  {
-    id: 'signature-reserve',
-    imageKey: 'hero_signature_reserve_banner',
-    badgeVi: 'Báo Đen · 60% Robusta · 20% Culi · 20% Arabica',
-    badgeEn: 'Black Panther · 60% Robusta · 20% Culi · 20% Arabica',
-    titleVi: 'ROAR SIGNATURE RESERVE — ĐẲNG CẤP TINH HOA',
-    titleEn: 'ROAR SIGNATURE RESERVE — LUXURY EDITION',
-    descVi:
-      'Tuyệt phẩm phối trộn chỉ định từ nhân xanh chế biến ướt CBU, lớp crema dày mịn hổ phách và hộp quà đen huyền – vàng champagne cho những dấu ấn trang trọng.',
-    descEn:
-      'Precision-crafted flagship blend with specified Washed CBU green beans, rich tiger-striped crema, and obsidian-gold executive gifting.',
-    captionVi: 'Chiết xuất Espresso Signature Reserve với lớp crema vàng hổ phách đặc trưng.',
-    captionEn: 'Signature Reserve Espresso extraction with rich amber tiger-striped crema.',
-    primaryCtaVi: 'Khám phá Signature Reserve',
-    primaryCtaEn: 'Discover Signature Reserve',
-    primaryTo: '/signature-reserve',
-    secondaryCtaVi: 'Đặt mua phiên bản Reserve',
-    secondaryCtaEn: 'Shop Reserve Edition',
-    secondaryTo: '/product/signature-reserve',
-    tabLabelVi: '02 · Signature Reserve',
-    tabLabelEn: '02 · Signature Reserve',
-    surfaceClass: 'bg-[#0D1913]',
-  },
-  {
-    id: 'green-matrix',
-    imageKey: 'hero_highland_harvest_banner',
-    badgeVi: 'Nguồn hạt Cao nguyên · Chuẩn B2B & Xuất khẩu',
-    badgeEn: 'Highland Harvest · B2B & Export Matrix',
-    titleVi: '27 CẤU HÌNH NHÂN XANH S14 / S16 / S18',
-    titleEn: '27 CONFIGURABLE GREEN COFFEE SKUS',
-    descVi:
-      'Minh bạch từng vùng trồng Tây Nguyên với 3 dòng hạt (Robusta, Arabica, Culi/Peaberry), 3 cỡ sàng và 3 phương pháp Natural, Honey, Washed (CBU) sẵn sàng gửi mẫu thử.',
-    descEn:
-      'Traceable Central Highlands sourcing across 3 bean types, 3 screen grades (S14, S16, S18), and Natural, Honey & Washed (CBU) processing with sample fulfillment.',
-    captionVi: 'Mùa thu hoạch chín mọng trên cao nguyên Tây Nguyên — nền tảng của mọi mẻ rang chuẩn.',
-    captionEn: 'Ripe highland coffee harvest across Vietnam Central Highlands — foundation of every roast.',
-    primaryCtaVi: 'Mở ma trận nhân xanh 27 mã',
-    primaryCtaEn: 'Open 27-SKU Matrix',
-    primaryTo: '/coffee/green-beans',
-    secondaryCtaVi: 'OEM & Xuất khẩu',
-    secondaryCtaEn: 'OEM & Export',
-    secondaryTo: '/oem-export',
-    tabLabelVi: '03 · Nhân xanh B2B',
-    tabLabelEn: '03 · Green Coffee B2B',
-    surfaceClass: 'bg-[#003D25]',
-  },
-  {
-    id: 'brewing-craft',
-    imageKey: 'product_brewing_ritual',
-    badgeVi: 'Từ Nông Trại Đến Tách Cà Phê',
-    badgeEn: 'From Farm to Cup Craft',
-    titleVi: 'NGHỆ THUẬT PHA PHIN & RANG XAY CHUẨN MỰC',
-    titleEn: 'VIETNAMESE PHIN & ROASTERY DISCIPLINE',
-    descVi:
-      'Khám phá quy trình 8 bước khép kín từ canh tác, chế biến đến công thức pha Phin truyền thống, Espresso, Pour-over và Cold Brew tối ưu cho từng gu thưởng thức.',
-    descEn:
-      'Explore our 8-stage farm-to-cup workflow alongside calibrated recipes for Vietnamese Phin, Espresso, Pour-over, French Press, and Cold Brew.',
-    captionVi: 'Nghi thức pha Phin Việt Nam chậm rãi, tôn vinh hương vị nguyên bản.',
-    captionEn: 'Slow Vietnamese Phin ritual celebrating authentic highland terroir.',
-    primaryCtaVi: 'Xem hướng dẫn pha chế',
-    primaryCtaEn: 'Brewing Guide',
-    primaryTo: '/brewing',
-    secondaryCtaVi: 'Hành trình 8 bước',
-    secondaryCtaEn: '8-Stage Journey',
-    secondaryTo: '/farm-to-cup',
-    tabLabelVi: '04 · Pha chế & Quy trình',
-    tabLabelEn: '04 · Brew & Craft',
-    surfaceClass: 'bg-[#062C1B]',
-  },
-];
 
 export const HomePage: React.FC = () => {
   const { lang, t, localePath } = useI18n();
-  const { personalities, formatPrice, addToCart, showToast, theme } = useStore();
+  const { personalities, settings, formatPrice, addToCart, showToast, theme } = useStore();
+
+  const heroSlides = useMemo(
+    () => parseHeroSlides(settings.cms_hero_slides_json),
+    [settings.cms_hero_slides_json]
+  );
+  const heroMetrics = useMemo(
+    () => parseHeroMetrics(settings.cms_hero_metrics_json),
+    [settings.cms_hero_metrics_json]
+  );
 
   const [featuredProducts, setFeaturedProducts] = useState<Product[]>([]);
   const [giftVouchers, setGiftVouchers] = useState<Product[]>([]);
@@ -165,19 +58,20 @@ export const HomePage: React.FC = () => {
   const isCarouselPaused = heroPaused || userPaused;
 
   useEffect(() => {
-    if (isCarouselPaused) return;
+    if (isCarouselPaused || heroSlides.length <= 1) return;
     const prefersReduced =
       typeof window !== 'undefined' &&
       typeof window.matchMedia === 'function' &&
       window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (prefersReduced) return;
     const timer = window.setInterval(() => {
-      setHeroIdx((prev) => (prev + 1) % HERO_SLIDES.length);
+      setHeroIdx((prev) => (prev + 1) % heroSlides.length);
     }, 6500);
     return () => window.clearInterval(timer);
-  }, [isCarouselPaused]);
+  }, [isCarouselPaused, heroSlides.length]);
 
-  const activeSlide = HERO_SLIDES[heroIdx];
+  const safeHeroIdx = heroSlides.length > 0 ? heroIdx % heroSlides.length : 0;
+  const activeSlide = heroSlides[safeHeroIdx];
   const selectedGreenSku = `${gcType}-${gcScreen}-${gcProc}`;
   const selectedGreenSlug = `green-${gcType.toLowerCase()}-${gcScreen.toLowerCase()}-${gcProc.toLowerCase()}`;
 
@@ -185,11 +79,11 @@ export const HomePage: React.FC = () => {
     touchStartX.current = e.touches[0]?.clientX ?? null;
   };
   const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current === null) return;
+    if (touchStartX.current === null || heroSlides.length <= 1) return;
     const endX = e.changedTouches[0]?.clientX ?? touchStartX.current;
     const delta = endX - touchStartX.current;
     if (Math.abs(delta) > 45) {
-      setHeroIdx((prev) => (delta < 0 ? (prev + 1) % HERO_SLIDES.length : (prev - 1 + HERO_SLIDES.length) % HERO_SLIDES.length));
+      setHeroIdx((prev) => (delta < 0 ? (prev + 1) % heroSlides.length : (prev - 1 + heroSlides.length) % heroSlides.length));
     }
     touchStartX.current = null;
   };
@@ -209,7 +103,7 @@ export const HomePage: React.FC = () => {
             <div className="flex items-center justify-between gap-3">
               <AdaptiveLogo variant="horizontal" surface="dark" size="sm" />
               <span className="font-mono text-[11px] text-[#C6A667]/90 border border-[#C6A667]/30 px-2 py-0.5 rounded tabular-nums">
-                0{heroIdx + 1} / 0{HERO_SLIDES.length}
+                {String(safeHeroIdx + 1).padStart(2, '0')} / {String(heroSlides.length).padStart(2, '0')}
               </span>
             </div>
 
@@ -233,80 +127,25 @@ export const HomePage: React.FC = () => {
                 <span>{lang === 'vi' ? activeSlide.primaryCtaVi : activeSlide.primaryCtaEn}</span>
                 <ArrowRight className="w-4 h-4" />
               </Link>
-              <Link
-                to={localePath(activeSlide.secondaryTo)}
-                className="inline-flex items-center gap-2 px-5 py-2.5 border border-white/30 text-white font-medium text-xs sm:text-sm rounded hover:bg-white/10 transition-colors whitespace-nowrap"
-              >
-                <span>{lang === 'vi' ? activeSlide.secondaryCtaVi : activeSlide.secondaryCtaEn}</span>
-              </Link>
+              {activeSlide.secondaryCtaVi && activeSlide.secondaryTo && (
+                <Link
+                  to={localePath(activeSlide.secondaryTo)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 border border-white/30 text-white font-medium text-xs sm:text-sm rounded hover:bg-white/10 transition-colors whitespace-nowrap"
+                >
+                  <span>{lang === 'vi' ? activeSlide.secondaryCtaVi : activeSlide.secondaryCtaEn}</span>
+                </Link>
+              )}
             </div>
 
-            {/* Dynamic Horizontal Running Carousel of 8 Diverse Metrics */}
+            {/* Dynamic Horizontal Running Carousel of Diverse Metrics */}
             <div className="pt-3 border-t border-white/15">
               <div className="relative overflow-hidden [mask-image:linear-gradient(to_right,transparent,black_5%,black_95%,transparent)]">
                 <div className="animate-metrics-marquee gap-2.5">
                   {[0, 1].map((dup) => (
                     <div key={dup} className="flex items-stretch gap-2.5 pr-2.5" aria-hidden={dup === 1}>
-                      {[
-                        {
-                          value: '7',
-                          dot: 'bg-[#C6A667]',
-                          title: t('Cá tính thương hiệu', 'Brand Personalities'),
-                          sub: t('Hổ · Sư Tử · Cáo · Báo Đen · Sói', 'Tiger · Lion · Fox · Panther · Wolf'),
-                          to: '/personalities',
-                        },
-                        {
-                          value: '27+ SKUs',
-                          dot: 'bg-emerald-400',
-                          title: t('Ma trận Nhân xanh B2B', 'B2B Green Coffee Matrix'),
-                          sub: t('Robusta · Arabica · Culi S14–S18', 'Robusta · Arabica · Culi S14–S18'),
-                          to: '/coffee/green-beans',
-                        },
-                        {
-                          value: 'CBU',
-                          dot: 'bg-amber-300',
-                          title: t('Chuẩn Chế Biến Ướt', 'Washed CBU Standard'),
-                          sub: t('Full Washed · Honey · Natural', 'Full Washed · Honey · Natural'),
-                          to: '/coffee/roasted-beans',
-                        },
-                        {
-                          value: '6 S18',
-                          dot: 'bg-[#C6A667]',
-                          title: t('Hạt rang 5 mức giá kg', 'Roasted Beans 5-Tier kg'),
-                          sub: t('1kg · 5–19kg · 20–99kg · ≥100kg', '1kg · 5–19kg · 20–99kg · ≥100kg'),
-                          to: '/coffee/roasted-beans',
-                        },
-                        {
-                          value: '10 Vùng',
-                          dot: 'bg-emerald-300',
-                          title: t('Cao nguyên Việt Nam', 'Vietnam Highland Origins'),
-                          sub: t('Cầu Đất 1.500m · Buôn Ma Thuột', 'Cau Dat 1,500m · Buon Ma Thuot'),
-                          to: '/regions',
-                        },
-                        {
-                          value: '100% Mộc',
-                          dot: 'bg-amber-400',
-                          title: t('Rang mới chuẩn COA', 'Fresh Roast · COA Verified'),
-                          sub: t('Không tẩm ướp · Ẩm ≤12.5%', 'Pure roast · Moisture ≤12.5%'),
-                          to: '/quality',
-                        },
-                        {
-                          value: 'OEM / B2B',
-                          dot: 'bg-[#C6A667]',
-                          title: t('Gia công & Xuất khẩu', 'OEM Roasting & Export'),
-                          sub: t('HORECA · Nhãn riêng · Mẫu thử', 'HORECA · Private Label · Samples'),
-                          to: '/partners',
-                        },
-                        {
-                          value: '24/7 AI',
-                          dot: 'bg-emerald-400',
-                          title: t('Barista & Báo giá nhanh', 'AI Barista & Instant Quote'),
-                          sub: t('Tư vấn gu uống · Báo giá theo kg', 'Taste match · Live kg quotes'),
-                          to: '/brewing',
-                        },
-                      ].map((item, idx) => (
+                      {heroMetrics.map((item, idx) => (
                         <Link
-                          key={`${dup}-${idx}`}
+                          key={`${dup}-${item.id || idx}`}
                           to={localePath(item.to)}
                           className="group w-[178px] sm:w-[192px] shrink-0 p-2.5 rounded-lg bg-white/6 hover:bg-white/14 border border-white/12 hover:border-[#C6A667]/60 transition-all"
                         >
@@ -317,10 +156,10 @@ export const HomePage: React.FC = () => {
                             <span className={`w-1.5 h-1.5 rounded-full ${item.dot} animate-pulse`} />
                           </div>
                           <span className="block text-[11px] font-semibold text-white leading-tight mt-0.5 truncate">
-                            {item.title}
+                            {lang === 'vi' ? item.titleVi : item.titleEn}
                           </span>
                           <span className="block text-[10px] text-[#F8F5EF]/70 mt-0.5 truncate">
-                            {item.sub}
+                            {lang === 'vi' ? item.subVi : item.subEn}
                           </span>
                         </Link>
                       ))}
@@ -334,12 +173,12 @@ export const HomePage: React.FC = () => {
           {/* Uniform 4:3 Aspect Ratio Hero Media Frame */}
           <div className="lg:col-span-6 w-full">
             <div className="relative w-full aspect-[4/3] max-h-[370px] rounded-xl overflow-hidden border border-[#C6A667]/25 bg-black/25">
-              {HERO_SLIDES.map((slide, idx) => (
+              {heroSlides.map((slide, idx) => (
                 <div
                   key={slide.id}
-                  aria-hidden={idx !== heroIdx}
+                  aria-hidden={idx !== safeHeroIdx}
                   className={`absolute inset-0 transition-all duration-700 ease-out ${
-                    idx === heroIdx ? 'opacity-100 scale-100 z-10' : 'opacity-0 scale-[1.03] z-0 pointer-events-none'
+                    idx === safeHeroIdx ? 'opacity-100 scale-100 z-10' : 'opacity-0 scale-[1.03] z-0 pointer-events-none'
                   }`}
                 >
                   <MediaImage
@@ -364,7 +203,7 @@ export const HomePage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setHeroIdx((prev) => (prev - 1 + HERO_SLIDES.length) % HERO_SLIDES.length)}
+                    onClick={() => setHeroIdx((prev) => (prev - 1 + heroSlides.length) % heroSlides.length)}
                     aria-label={t('Banner trước', 'Previous banner')}
                     className="w-8 h-8 rounded-full bg-black/55 border border-white/25 text-white flex items-center justify-center hover:bg-[#C6A667] hover:text-[#111111] transition-colors cursor-pointer"
                   >
@@ -372,7 +211,7 @@ export const HomePage: React.FC = () => {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setHeroIdx((prev) => (prev + 1) % HERO_SLIDES.length)}
+                    onClick={() => setHeroIdx((prev) => (prev + 1) % heroSlides.length)}
                     aria-label={t('Banner tiếp theo', 'Next banner')}
                     className="w-8 h-8 rounded-full bg-black/55 border border-white/25 text-white flex items-center justify-center hover:bg-[#C6A667] hover:text-[#111111] transition-colors cursor-pointer"
                   >
@@ -387,8 +226,8 @@ export const HomePage: React.FC = () => {
         {/* Compact Hero Banner Selector Tabs with Dynamic Progress Track */}
         <div className="border-t border-white/10 bg-black/15">
           <div className="max-w-[1280px] mx-auto px-5 sm:px-6 py-2 grid grid-cols-2 lg:grid-cols-4 gap-2">
-            {HERO_SLIDES.map((slide, idx) => {
-              const active = idx === heroIdx;
+            {heroSlides.map((slide, idx) => {
+              const active = idx === safeHeroIdx;
               return (
                 <button
                   key={slide.id}
@@ -403,7 +242,7 @@ export const HomePage: React.FC = () => {
                   <span className="block truncate">{lang === 'vi' ? slide.tabLabelVi : slide.tabLabelEn}</span>
                   {active && !isCarouselPaused && (
                     <span
-                      key={`prog-${heroIdx}`}
+                      key={`prog-${safeHeroIdx}`}
                       className="absolute inset-x-0 bottom-0 h-[2.5px] bg-[#003D25]/60 animate-hero-progress"
                     />
                   )}

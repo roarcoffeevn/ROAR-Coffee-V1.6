@@ -83,6 +83,23 @@ export async function fetchBootstrapWithFallback(): Promise<{
   for (const row of snap.tables.site_settings || []) {
     settings[row.key] = row.value;
   }
+  try {
+    if (typeof window !== 'undefined' && window.localStorage) {
+      const rawStatic = window.localStorage.getItem('roar_static_runtime_v1');
+      if (rawStatic) {
+        const parsedStatic = JSON.parse(rawStatic);
+        if (parsedStatic?.settingsOverlay && typeof parsedStatic.settingsOverlay === 'object') {
+          for (const [k, v] of Object.entries(parsedStatic.settingsOverlay)) {
+            if (!k.startsWith('_')) {
+              settings[k] = String(v ?? '');
+            }
+          }
+        }
+      }
+    }
+  } catch {
+    // ignore storage read errors
+  }
 
   const origins: CoffeeOrigin[] = (snap.tables.coffee_origins || []).map((o) => ({
     ...o,
