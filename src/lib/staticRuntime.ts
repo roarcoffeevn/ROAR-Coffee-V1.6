@@ -244,8 +244,12 @@ function resolveOrCreateStaticCustomer(
   const phoneKey = normalizePhoneKey(cleanPhone);
 
   const authU = params.authUser || null;
+  const authEmail = authU ? authU.email.toLowerCase() : '';
+  const authPhoneKey = authU ? normalizePhoneKey(authU.phone) : '';
   const shouldUseSessionUser =
-    Boolean(authU) && (authU!.role !== 'admin' || !cleanEmail || cleanEmail === authU!.email.toLowerCase());
+    Boolean(authU) &&
+    (authU!.role !== 'admin' ||
+      (cleanEmail ? cleanEmail === authEmail : !phoneKey || phoneKey === authPhoneKey));
 
   if (shouldUseSessionUser && authU) {
     if (cleanPhone && !String(authU.phone || '').trim()) {

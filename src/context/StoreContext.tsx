@@ -224,11 +224,15 @@ interface StoreContextValue {
   toast: string | null;
   showToast: (msg: string) => void;
   theme: 'light' | 'dark';
+  themeMode: ThemeMode;
+  setThemeMode: (next: ThemeMode) => void;
   setTheme: (next: 'light' | 'dark') => void;
   toggleTheme: () => void;
   customBreadcrumb: BreadcrumbNode[] | null;
   setCustomBreadcrumb: (nodes: BreadcrumbNode[] | null) => void;
 }
+
+export type ThemeMode = 'system' | 'light' | 'dark';
 
 const StoreContext = createContext<StoreContextValue | null>(null);
 
@@ -257,10 +261,16 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     const saved = safeGetStorage('roar_currency');
     return saved === 'USD' ? 'USD' : 'VND';
   });
-  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    const saved = safeGetStorage('roar_theme');
-    return saved === 'dark' ? 'dark' : 'light';
+  const [themeMode, setThemeMode] = useState<ThemeMode>(() => {
+    const saved = safeGetStorage('roar_theme_mode');
+    if (saved === 'light' || saved === 'dark' || saved === 'system') return saved;
+    return 'system';
   });
+  const [systemPrefersDark, setSystemPrefersDark] = useState<boolean>(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return false;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+  const theme: 'light' | 'dark' = themeMode === 'system' ? (systemPrefersDark ? 'dark' : 'light') : themeMode;
   const [cart, setCart] = useState<CartItem[]>(() => {
     try {
       return JSON.parse(safeGetStorage('roar_cart') || '[]');
@@ -455,14 +465,37 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
   }, [recentlyViewed]);
 
   useEffect(() => {
+    if (typeof window === 'undefined' || !window.matchMedia) return;
+    const mq = window.matchMedia('(prefers-color-scheme: dark)');
+    const onChange = (e: MediaQueryListEvent) => setSystemPrefersDark(e.matches);
+    setSystemPrefersDark(mq.matches);
+    if (typeof mq.addEventListener === 'function') {
+      mq.addEventListener('change', onChange);
+      return () => mq.removeEventListener('change', onChange);
+    }
+    mq.addListener(onChange);
+    return () => mq.removeListener(onChange);
+  }, []);
+
+  useEffect(() => {
+    safeSetStorage('roar_theme_mode', themeMode);
     safeSetStorage('roar_theme', theme);
     if (typeof document !== 'undefined') {
       document.documentElement.classList.toggle('dark', theme === 'dark');
+      document.documentElement.style.colorScheme = theme;
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) {
+        meta.setAttribute('content', theme === 'dark' ? '#0E1512' : '#00552B');
+      }
     }
-  }, [theme]);
+  }, [themeMode, theme]);
+
+  const setTheme = useCallback((next: 'light' | 'dark') => {
+    setThemeMode(next);
+  }, []);
 
   const toggleTheme = useCallback(() => {
-    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
+    setThemeMode((prev) => (prev === 'system' ? 'light' : prev === 'light' ? 'dark' : 'system'));
   }, []);
 
   const addToCart = (item: CartItem) => {
@@ -602,6 +635,8 @@ export const StoreProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         toast,
         showToast,
         theme,
+        themeMode,
+        setThemeMode,
         setTheme,
         toggleTheme,
         customBreadcrumb,

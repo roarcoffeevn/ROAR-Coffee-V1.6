@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
-import { Bell, ChevronDown, Menu, Moon, Search, ShoppingBag, Sun, User, X, Phone, Mail } from 'lucide-react';
+import { Bell, ChevronDown, Menu, Monitor, Moon, Search, ShoppingBag, Sun, User, X, Phone, Mail } from 'lucide-react';
 import { AdaptiveLogo } from './AdaptiveLogo';
 import { stripLocalePrefix, useI18n } from '../i18n/I18nContext';
 import { useStore } from '../context/StoreContext';
 
 export const Header: React.FC = () => {
   const { lang, setLang, t, localePath } = useI18n();
-  const { cartCount, setCartOpen, user, theme, toggleTheme } = useStore();
+  const { cartCount, setCartOpen, user, theme, themeMode, setThemeMode, toggleTheme } = useStore();
   const navigate = useNavigate();
   const { pathname, search } = useLocation();
   const cleanPath = stripLocalePrefix(pathname);
@@ -38,7 +38,7 @@ export const Header: React.FC = () => {
         className="sticky top-0 z-40 bg-[#F8F5EF]/95 dark:bg-[#0E1512]/95 backdrop-blur-md border-b border-[#202020]/10 dark:border-white/10 pt-safe transition-colors"
       >
         {/* Desktop Header */}
-        <div className="hidden lg:flex max-w-[1280px] mx-auto px-6 h-[74px] items-center justify-between gap-8">
+        <div className="hidden lg:flex max-w-[1280px] mx-auto px-6 h-[82px] items-center justify-between gap-8">
           <Link to={localePath('/')} onClick={closeAll} className="shrink-0 flex items-center">
             <AdaptiveLogo variant="horizontal" surface={theme === 'dark' ? 'dark' : 'light'} size="sm" />
           </Link>
@@ -110,11 +110,36 @@ export const Header: React.FC = () => {
             <button
               type="button"
               onClick={toggleTheme}
-              aria-label={theme === 'dark' ? t('Chuyển sang chế độ sáng', 'Switch to Light Mode') : t('Chuyển sang chế độ tối', 'Switch to Dark Mode')}
-              title={theme === 'dark' ? t('Chế độ Sáng', 'Light Mode') : t('Chế độ Tối', 'Dark Mode')}
-              className="p-2 rounded-md border border-[#202020]/15 dark:border-white/15 text-[#202020] dark:text-[#C6A667] hover:bg-[#202020]/5 dark:hover:bg-white/10 transition-colors cursor-pointer"
+              aria-label={
+                themeMode === 'system'
+                  ? t('Giao diện theo hệ thống — bấm để chuyển Sáng', 'System Theme — click for Light Mode')
+                  : themeMode === 'light'
+                    ? t('Chế độ Sáng — bấm để chuyển Tối', 'Light Mode — click for Dark Mode')
+                    : t('Chế độ Tối — bấm để theo hệ thống', 'Dark Mode — click for System Theme')
+              }
+              title={
+                themeMode === 'system'
+                  ? t('Theo thiết bị (Tự động Sáng/Tối)', 'System Auto (Matches device)')
+                  : themeMode === 'light'
+                    ? t('Chế độ Sáng', 'Light Mode')
+                    : t('Chế độ Tối', 'Dark Mode')
+              }
+              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-[#202020]/15 dark:border-white/15 text-[#202020] dark:text-[#C6A667] hover:bg-[#202020]/5 dark:hover:bg-white/10 transition-colors cursor-pointer text-xs font-medium whitespace-nowrap"
             >
-              {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+              {themeMode === 'system' ? (
+                <Monitor className="w-3.5 h-3.5" />
+              ) : themeMode === 'dark' ? (
+                <Moon className="w-3.5 h-3.5" />
+              ) : (
+                <Sun className="w-3.5 h-3.5" />
+              )}
+              <span>
+                {themeMode === 'system'
+                  ? t('Hệ thống', 'Auto')
+                  : themeMode === 'dark'
+                    ? t('Tối', 'Dark')
+                    : t('Sáng', 'Light')}
+              </span>
             </button>
 
             <div className="flex items-center border border-[#202020]/15 dark:border-white/15 rounded-md overflow-hidden text-xs font-medium">
@@ -183,7 +208,7 @@ export const Header: React.FC = () => {
         </div>
 
         {/* Mobile Compact Header (320px–430px & tablet) with centered vertical logo */}
-        <div className="lg:hidden relative flex items-center justify-between h-[64px] px-2.5 sm:px-4">
+        <div className="lg:hidden relative flex items-center justify-between h-[72px] px-2.5 sm:px-4">
           <button
             type="button"
             onClick={() => setDrawerOpen(true)}
@@ -198,17 +223,36 @@ export const Header: React.FC = () => {
             onClick={closeAll}
             className="absolute left-1/2 -translate-x-1/2 flex items-center justify-center py-1"
           >
-            <AdaptiveLogo variant="vertical" surface={theme === 'dark' ? 'dark' : 'light'} size="xs" />
+            <AdaptiveLogo variant="vertical" surface={theme === 'dark' ? 'dark' : 'light'} darkTone="gold" size="xs" />
           </Link>
 
           <div className="flex items-center gap-1 shrink-0 z-10">
             <button
               type="button"
               onClick={toggleTheme}
-              aria-label={theme === 'dark' ? t('Chế độ Sáng', 'Light Mode') : t('Chế độ Tối', 'Dark Mode')}
+              aria-label={
+                themeMode === 'system'
+                  ? t('Giao diện theo thiết bị', 'System Theme')
+                  : themeMode === 'dark'
+                    ? t('Chế độ Tối', 'Dark Mode')
+                    : t('Chế độ Sáng', 'Light Mode')
+              }
+              title={
+                themeMode === 'system'
+                  ? t('Theo thiết bị (Tự động)', 'System Auto')
+                  : themeMode === 'dark'
+                    ? t('Chế độ Tối', 'Dark Mode')
+                    : t('Chế độ Sáng', 'Light Mode')
+              }
               className="w-8 h-8 flex items-center justify-center rounded border border-[#202020]/15 dark:border-white/15 text-[#202020] dark:text-[#C6A667] cursor-pointer"
             >
-              {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
+              {themeMode === 'system' ? (
+                <Monitor className="w-3.5 h-3.5" />
+              ) : themeMode === 'dark' ? (
+                <Moon className="w-3.5 h-3.5" />
+              ) : (
+                <Sun className="w-3.5 h-3.5" />
+              )}
             </button>
             <button
               type="button"
@@ -642,8 +686,8 @@ export const Header: React.FC = () => {
         <div className="fixed inset-0 z-50 lg:hidden flex">
           <div className="fixed inset-0 bg-black/55" onClick={() => setDrawerOpen(false)} />
           <div className="relative w-[86%] max-w-[340px] bg-[#F8F5EF] dark:bg-[#0E1512] h-full flex flex-col shadow-2xl overflow-y-auto">
-            <div className="flex items-center justify-between px-4 h-[58px] border-b border-[#202020]/10 dark:border-white/10">
-              <AdaptiveLogo variant="horizontal" surface={theme === 'dark' ? 'dark' : 'light'} size="xs" />
+            <div className="flex items-center justify-between px-4 h-[68px] border-b border-[#202020]/10 dark:border-white/10">
+              <AdaptiveLogo variant="horizontal" surface={theme === 'dark' ? 'dark' : 'light'} darkTone="gold" size="xs" />
               <button
                 type="button"
                 onClick={() => setDrawerOpen(false)}
@@ -794,16 +838,29 @@ export const Header: React.FC = () => {
             </nav>
 
             <div className="p-4 border-t border-[#202020]/10 dark:border-white/10 space-y-3 bg-white dark:bg-[#16221C]">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-[#202020]/70 dark:text-[#F1EFEA]/70">{t('Giao diện', 'Theme')}</span>
-                <button
-                  type="button"
-                  onClick={toggleTheme}
-                  className="inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded font-medium bg-[#F8F5EF] dark:bg-[#0E1512] text-[#202020] dark:text-[#C6A667] border border-[#202020]/10 dark:border-white/15 cursor-pointer"
-                >
-                  {theme === 'dark' ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-                  <span>{theme === 'dark' ? t('Chế độ Sáng', 'Light Mode') : t('Chế độ Tối', 'Dark Mode')}</span>
-                </button>
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs text-[#202020]/70 dark:text-[#F1EFEA]/70 shrink-0">{t('Giao diện', 'Theme')}</span>
+                <div className="flex gap-1">
+                  {([
+                    { mode: 'system' as const, vi: 'Hệ thống', en: 'Auto', Icon: Monitor },
+                    { mode: 'light' as const, vi: 'Sáng', en: 'Light', Icon: Sun },
+                    { mode: 'dark' as const, vi: 'Tối', en: 'Dark', Icon: Moon },
+                  ]).map(({ mode, vi, en, Icon }) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setThemeMode(mode)}
+                      className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs rounded font-medium cursor-pointer transition-colors ${
+                        themeMode === mode
+                          ? 'bg-[#00552B] text-white dark:bg-[#C6A667] dark:text-[#111111]'
+                          : 'bg-[#F8F5EF] dark:bg-[#0E1512] text-[#202020] dark:text-[#F1EFEA] border border-[#202020]/10 dark:border-white/10'
+                      }`}
+                    >
+                      <Icon className="w-3 h-3" />
+                      <span>{t(vi, en)}</span>
+                    </button>
+                  ))}
+                </div>
               </div>
 
               <div className="flex items-center justify-between">

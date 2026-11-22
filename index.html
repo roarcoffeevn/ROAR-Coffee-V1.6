@@ -11,6 +11,19 @@
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="apple-touch-icon" href="/favicon.svg" />
     <meta name="theme-color" content="#00552B" />
+    <script>
+      (function () {
+        try {
+          var mode = localStorage.getItem('roar_theme_mode');
+          var sysDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+          var isDark = mode === 'dark' || ((!mode || mode === 'system') && sysDark);
+          document.documentElement.classList.toggle('dark', isDark);
+          document.documentElement.style.colorScheme = isDark ? 'dark' : 'light';
+          var meta = document.querySelector('meta[name="theme-color"]');
+          if (meta) meta.setAttribute('content', isDark ? '#0E1512' : '#00552B');
+        } catch (e) {}
+      })();
+    </script>
     <meta property="og:title" content="ROAR COFFEE® — Igniting Courage. Defining Character." />
     <meta
       property="og:description"

@@ -1642,10 +1642,13 @@ function resolveOrCreateOrderCustomer(params: {
       .get(params.authUser.userId);
   }
 
-  // Only bind directly to session user if non-admin OR email matches session user's email
+  const authEmail = String(authUserRow?.email || '').toLowerCase();
+  const authPhoneKey = normalizeMemberPhoneKey(String(authUserRow?.phone || ''));
+  // Only bind directly to session user if non-admin OR email/phone matches session user
   const shouldUseSessionUser =
     Boolean(authUserRow) &&
-    (authUserRow.role !== 'admin' || !cleanEmail || cleanEmail === String(authUserRow.email || '').toLowerCase());
+    (authUserRow.role !== 'admin' ||
+      (cleanEmail ? cleanEmail === authEmail : !phoneKey || phoneKey === authPhoneKey));
 
   if (shouldUseSessionUser && authUserRow) {
     if (cleanPhone && !String(authUserRow.phone || '').trim()) {
