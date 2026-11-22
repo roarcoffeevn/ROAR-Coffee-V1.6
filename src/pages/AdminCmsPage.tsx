@@ -17,6 +17,7 @@ import {
   FileText,
   Image as ImageIcon,
   ImagePlus,
+  KeyRound,
   LayoutDashboard,
   Lock,
   LogOut,
@@ -43,6 +44,7 @@ import {
 import { AdaptiveLogo } from '../components/AdaptiveLogo';
 import { useI18n } from '../i18n/I18nContext';
 import { useStore, type CmsPageData } from '../context/StoreContext';
+import { normalizeMembershipTierName } from '../lib/membershipTiers';
 import { resolveMediaUrl } from '../lib/media';
 import {
   localizeB2BType,
@@ -61,6 +63,7 @@ import { PagesManagerSection } from '../components/admin/PagesManagerSection';
 import { TeamRbacSection, type AdminTeamMember, type NonAdminCandidate } from '../components/admin/TeamRbacSection';
 import { AdminMenuCategoryManager } from '../components/admin/AdminMenuCategoryManager';
 import { AdminHeroBannerManager } from '../components/admin/AdminHeroBannerManager';
+import { ResetPasswordModal, type ResetPasswordTarget } from '../components/admin/ResetPasswordModal';
 
 type CmsSection = AdminPermission | 'menus' | 'hero';
 
@@ -165,6 +168,7 @@ export const AdminCmsPage: React.FC = () => {
   const [notifyMessageEn, setNotifyMessageEn] = useState('');
   const [notifyCategory, setNotifyCategory] = useState<'promo' | 'loyalty' | 'order' | 'system'>('promo');
   const [sendingNotify, setSendingNotify] = useState(false);
+  const [resetPasswordTarget, setResetPasswordTarget] = useState<ResetPasswordTarget | null>(null);
 
   // Promotions Form
   const [promoCode, setPromoCode] = useState('');
@@ -332,7 +336,12 @@ export const AdminCmsPage: React.FC = () => {
           showToast(t('Đăng nhập hệ thống quản trị thành công', 'Signed in to ROAR CMS'));
         }
       } else {
-        const msg = d.error || t('Sai email hoặc mật khẩu quản trị.', 'Invalid email or password.');
+        const msg =
+          d.error ||
+          t(
+            'Sai email hoặc mật khẩu quản trị. Nếu tài khoản vừa được nâng cấp từ khách hàng, hãy nhờ Super Admin đặt lại mật khẩu tại mục Phân quyền Thành viên.',
+            'Invalid admin email or password. If promoted from an order/customer account, ask a Super Admin to reset its password in Team RBAC.'
+          );
         setLoginError(msg);
         showToast(msg);
       }
@@ -718,8 +727,14 @@ export const AdminCmsPage: React.FC = () => {
           ) : (
             <form onSubmit={handleAdminLogin} className="space-y-4 text-sm">
               {loginError && (
-                <div className="p-3 rounded-lg bg-red-950/70 border border-red-500/40 text-xs text-red-200">
-                  {loginError}
+                <div className="p-3 rounded-lg bg-red-950/70 border border-red-500/40 text-xs text-red-200 space-y-1.5 leading-relaxed">
+                  <p>{loginError}</p>
+                  <p className="text-[11px] text-amber-200/90">
+                    {t(
+                      'Mẹo xử lý: Tài khoản được tạo tự động khi đặt đơn hoặc nâng cấp quyền trên trình duyệt khác chưa đồng bộ mật khẩu. Đăng nhập Super Admin để dùng nút "Đặt lại mật khẩu" trong Phân quyền Thành viên hoặc Khách hàng.',
+                      'Tip: Accounts created from orders or on another browser may need a password set via Super Admin → Team RBAC → Reset Password.'
+                    )}
+                  </p>
                 </div>
               )}
               <div>
@@ -2039,7 +2054,7 @@ export const AdminCmsPage: React.FC = () => {
                           </div>
                           <div className="flex items-center justify-between gap-1.5 pt-1">
                             <select
-                              value={c.tier}
+                              value={normalizeMembershipTierName(c.tier)}
                               onChange={(e) => adjustCustomer(c.id, e.target.value, 0)}
                               className="border border-slate-200 rounded px-2 py-1 bg-white text-[11px]"
                             >
@@ -2054,13 +2069,31 @@ export const AdminCmsPage: React.FC = () => {
                                 </option>
                               ))}
                             </select>
-                            <div className="flex items-center gap-1.5">
+                            <div className="flex flex-wrap items-center gap-1.5">
                               <button
                                 type="button"
-                                onClick={() => adjustCustomer(c.id, c.tier, 50)}
+                                onClick={() => adjustCustomer(c.id, normalizeMembershipTierName(c.tier), 50)}
                                 className="px-2 py-1 bg-slate-100 rounded font-mono text-[11px] cursor-pointer"
                               >
                                 +50
+                              </button>
+                              <button
+                                type="button"
+                                disabled={c.role === 'admin' && (!hasAdminPermission(user, 'team') || (c.admin_role === 'super_admin' && user?.adminRole !== 'super_admin'))}
+                                onClick={() =>
+                                  setResetPasswordTarget({
+                                    id: c.id,
+                                    email: c.email,
+                                    fullName: c.full_name,
+                                    role: c.role,
+                                    adminRole: c.admin_role,
+                                    memberCode: c.member_code,
+                                  })
+                                }
+                                className="px-2 py-1 bg-amber-50 border border-amber-200 text-amber-800 rounded font-semibold inline-flex items-center gap-1 text-[11px] cursor-pointer disabled:opacity-40"
+                              >
+                                <KeyRound className="w-3 h-3" />
+                                {t('Đặt lại MK', 'Reset Pass')}
                               </button>
                               <button
                                 type="button"
@@ -2133,7 +2166,7 @@ export const AdminCmsPage: React.FC = () => {
                               </td>
                               <td className="p-3">
                                 <select
-                                  value={c.tier}
+                                  value={normalizeMembershipTierName(c.tier)}
                                   onChange={(e) => adjustCustomer(c.id, e.target.value, 0)}
                                   className="border border-slate-200 rounded px-2 py-1 bg-white"
                                 >
@@ -2156,10 +2189,29 @@ export const AdminCmsPage: React.FC = () => {
                               <td className="p-3 text-right whitespace-nowrap space-x-1.5">
                                 <button
                                   type="button"
-                                  onClick={() => adjustCustomer(c.id, c.tier, 50)}
+                                  onClick={() => adjustCustomer(c.id, normalizeMembershipTierName(c.tier), 50)}
                                   className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 rounded font-mono cursor-pointer"
                                 >
                                   +50 {t('điểm', 'pts')}
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={c.role === 'admin' && (!hasAdminPermission(user, 'team') || (c.admin_role === 'super_admin' && user?.adminRole !== 'super_admin'))}
+                                  onClick={() =>
+                                    setResetPasswordTarget({
+                                      id: c.id,
+                                      email: c.email,
+                                      fullName: c.full_name,
+                                      role: c.role,
+                                      adminRole: c.admin_role,
+                                      memberCode: c.member_code,
+                                    })
+                                  }
+                                  title={t('Đặt lại mật khẩu đăng nhập thủ công', 'Manually reset user password')}
+                                  className="px-2.5 py-1 bg-amber-50 hover:bg-amber-100 border border-amber-200 text-amber-800 rounded font-semibold inline-flex items-center gap-1 cursor-pointer transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                                >
+                                  <KeyRound className="w-3 h-3" />
+                                  {t('Đặt lại MK', 'Reset Pass')}
                                 </button>
                                 <button
                                   type="button"
@@ -3562,6 +3614,12 @@ export const AdminCmsPage: React.FC = () => {
           </div>
         </div>
       )}
+
+      <ResetPasswordModal
+        target={resetPasswordTarget}
+        onClose={() => setResetPasswordTarget(null)}
+        onSuccess={loadAll}
+      />
     </div>
   );
 };

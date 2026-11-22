@@ -9,6 +9,7 @@ import { LoyaltyTierProgressCard } from '../components/LoyaltyTierProgressCard';
 import { DailyCheckinGame } from '../components/DailyCheckinGame';
 import { MediaImage } from '../components/MediaImage';
 import { getPromoVoucherImage } from '../lib/media';
+import { getTierDisplayName, normalizeMembershipTierName } from '../lib/membershipTiers';
 
 export const AccountPage: React.FC = () => {
   const { lang, t, localePath } = useI18n();
@@ -629,13 +630,19 @@ export const AccountPage: React.FC = () => {
     return true;
   });
 
+  const activeTierName = normalizeMembershipTierName(dash?.user?.tier || user.tier);
+  const activeTierDisplay = getTierDisplayName(activeTierName, lang);
+  const lifetimeSpendVnd = (dash?.orders || [])
+    .filter((o: any) => o.order_status !== 'Cancelled')
+    .reduce((sum: number, o: any) => sum + Number(o.total || 0), 0);
+
   return (
     <div className="max-w-[1200px] mx-auto px-6 py-12 space-y-8">
       {/* Member Header */}
       <div className="bg-[#003D25] text-white rounded-2xl p-6 sm:p-8 flex flex-col sm:flex-row sm:items-center justify-between gap-6">
         <div className="space-y-1.5">
           <p className="text-xs uppercase tracking-widest text-[#C6A667] font-semibold">
-            {user.tier} · <span className="font-mono">{user.memberCode}</span>
+            {activeTierDisplay} · <span className="font-mono">{user.memberCode}</span>
           </p>
           <h1 className="text-2xl sm:text-3xl font-bold">
             {t('Xin chào,', 'Welcome back,')} {user.fullName}
@@ -726,7 +733,8 @@ export const AccountPage: React.FC = () => {
           <LoyaltyTierProgressCard
             accumulatedPoints={Number(dash.points?.available || 0) + Number(dash.points?.redeemed || 0)}
             availablePoints={Number(dash.points?.available || 0)}
-            currentTierName={user.tier}
+            lifetimeSpendVnd={lifetimeSpendVnd}
+            currentTierName={activeTierName}
             onViewBenefits={() => switchTab('rewards')}
           />
 
@@ -1144,8 +1152,8 @@ export const AccountPage: React.FC = () => {
                 </p>
                 <p className="text-xs text-[#F8F5EF]/75 mt-1">
                   {t(
-                    `Điểm thưởng hiện có: ${(walletData?.points?.available ?? user.points?.available ?? 0).toLocaleString()} điểm · Hạng ${user.tier}`,
-                    `Available points: ${(walletData?.points?.available ?? user.points?.available ?? 0).toLocaleString()} pts · ${user.tier}`
+                    `Điểm thưởng hiện có: ${(walletData?.points?.available ?? user.points?.available ?? 0).toLocaleString()} điểm · Hạng: ${activeTierDisplay}`,
+                    `Available points: ${(walletData?.points?.available ?? user.points?.available ?? 0).toLocaleString()} pts · ${activeTierDisplay}`
                   )}
                 </p>
               </div>
@@ -1379,10 +1387,8 @@ export const AccountPage: React.FC = () => {
         <div className="space-y-8">
           <DailyCheckinGame onRewardClaimed={loadDashboard} />
           <MembershipTierVisualizer
-            currentTierName={user.tier}
-            lifetimeSpendVnd={(dash.orders || [])
-              .filter((o: any) => o.order_status !== 'Cancelled')
-              .reduce((sum: number, o: any) => sum + Number(o.total || 0), 0)}
+            currentTierName={activeTierName}
+            lifetimeSpendVnd={lifetimeSpendVnd}
             lifetimePoints={Number(dash.points?.available || 0) + Number(dash.points?.redeemed || 0)}
           />
           <div className="bg-white dark:bg-[#16221C] rounded-xl border border-[#202020]/10 dark:border-white/10 p-6 space-y-3">
@@ -1397,13 +1403,20 @@ export const AccountPage: React.FC = () => {
               )}
             </p>
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 pt-2">
-              {dash.tiers.map((tr: any) => (
-                <div key={tr.id} className={`p-4 rounded-lg border ${user.tier === tr.name ? 'border-[#00552B] dark:border-[#C6A667] bg-[#00552B]/5 dark:bg-[#00552B]/25' : 'border-[#202020]/10 dark:border-white/10 bg-[#F8F5EF] dark:bg-[#0E1512]'}`}>
-                  <p className="text-sm font-bold text-[#202020] dark:text-[#F1EFEA]">{tr.name}</p>
-                  <p className="text-xs font-mono text-[#00552B] dark:text-[#C6A667] mt-0.5">{tr.point_multiplier}x {t('Điểm', 'Points')}</p>
-                  <p className="text-[11px] text-[#202020]/70 dark:text-[#F1EFEA]/70 mt-2">{lang === 'vi' ? tr.benefits_vi : tr.benefits_en}</p>
-                </div>
-              ))}
+              {dash.tiers.map((tr: any) => {
+                const isCurrent = normalizeMembershipTierName(tr.name) === activeTierName;
+                const minSpend = Number(tr.min_spend_vnd || 0);
+                const minPts = Math.round(minSpend / 10000);
+                return (
+                  <div key={tr.id || tr.name} className={`p-4 rounded-lg border ${isCurrent ? 'border-[#00552B] dark:border-[#C6A667] bg-[#00552B]/5 dark:bg-[#00552B]/25' : 'border-[#202020]/10 dark:border-white/10 bg-[#F8F5EF] dark:bg-[#0E1512]'}`}>
+                    <p className="text-sm font-bold text-[#202020] dark:text-[#F1EFEA]">{getTierDisplayName(tr.name, lang)}</p>
+                    <p className="text-xs font-mono text-[#00552B] dark:text-[#C6A667] mt-0.5">
+                      {tr.point_multiplier}x {t('Điểm', 'Points')} · {minSpend > 0 ? `${minSpend.toLocaleString('vi-VN')}₫ (${minPts.toLocaleString('vi-VN')} ${t('điểm', 'pts')})` : t('Từ 0₫', 'From 0 VND')}
+                    </p>
+                    <p className="text-[11px] text-[#202020]/70 dark:text-[#F1EFEA]/70 mt-2">{lang === 'vi' ? tr.benefits_vi : tr.benefits_en}</p>
+                  </div>
+                );
+              })}
             </div>
           </div>
 

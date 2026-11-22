@@ -2,6 +2,11 @@ import { loadStaticSnapshot } from './staticFallback';
 import { calculateShippingFee, resolveVolumeTier } from './pricing';
 import { ALL_ADMIN_PERMISSIONS } from './rbac';
 import { buildLiveShippingTracking } from './shippingTracking';
+import {
+  normalizeMembershipTierName,
+  resolveEffectiveMembershipTier,
+  ROAR_MEMBERSHIP_TIERS,
+} from './membershipTiers';
 
 const STATIC_STATE_KEY = 'roar_static_runtime_v1';
 
@@ -185,8 +190,12 @@ function readState(): StaticRuntimeState {
     const raw = window.localStorage.getItem(STATIC_STATE_KEY);
     if (raw) {
       const parsed = JSON.parse(raw);
+      const rawUsers = Array.isArray(parsed.users) && parsed.users.length > 0 ? parsed.users : getDefaultUsers();
       return {
-        users: Array.isArray(parsed.users) && parsed.users.length > 0 ? parsed.users : getDefaultUsers(),
+        users: rawUsers.map((u: StaticUserRecord) => ({
+          ...u,
+          tier: normalizeMembershipTierName(u.tier),
+        })),
         orders: Array.isArray(parsed.orders) && parsed.orders.length > 0 ? parsed.orders : getDefaultOrders(),
         b2bInquiries: Array.isArray(parsed.b2bInquiries) ? parsed.b2bInquiries : [],
         newsletterSubscribers: Array.isArray(parsed.newsletterSubscribers) ? parsed.newsletterSubscribers : [],
@@ -317,6 +326,31 @@ function jsonResponse(data: any, status = 200): Response {
   });
 }
 
+function syncStaticUserTier(state: StaticRuntimeState, user: StaticUserRecord): boolean {
+  const xPhoneKey = normalizePhoneKey(user.phone);
+  const lifetimeSpendVnd = state.orders
+    .filter(
+      (o) =>
+        o.order_status !== 'Cancelled' &&
+        (Number(o.user_id) === user.id ||
+          String(o.customer_email || '').trim().toLowerCase() === user.email.toLowerCase() ||
+          (xPhoneKey.length >= 8 && normalizePhoneKey(o.customer_phone) === xPhoneKey))
+    )
+    .reduce((s, o) => s + Number(o.total || 0), 0);
+
+  const effective = resolveEffectiveMembershipTier({
+    currentTierName: user.tier,
+    lifetimeSpendVnd,
+    lifetimePoints: Number(user.points ?? 0),
+  }).tier.name;
+
+  if (effective !== user.tier) {
+    user.tier = effective;
+    return true;
+  }
+  return false;
+}
+
 function toPublicUser(u: StaticUserRecord) {
   return {
     id: u.id,
@@ -327,7 +361,7 @@ function toPublicUser(u: StaticUserRecord) {
     adminRole: u.adminRole,
     adminPermissions: u.adminPermissions,
     memberCode: u.memberCode,
-    tier: u.tier,
+    tier: normalizeMembershipTierName(u.tier),
     emailVerified: u.emailVerified,
     companyName: u.companyName || '',
     b2bVerified: Boolean(u.b2bVerified),
@@ -436,7 +470,7 @@ export async function handleStaticApiFallback(
           phone: '0912345678',
           role: 'customer',
           memberCode: 'RC-MEM-1001',
-          tier: 'ROAR Bạc',
+          tier: 'ROAR Silver',
           emailVerified: true,
           walletBalance: 500000,
           points: 120,
@@ -459,7 +493,7 @@ export async function handleStaticApiFallback(
           adminRole: 'editor',
           adminPermissions: [...ALL_ADMIN_PERMISSIONS],
           memberCode: 'RC-ADM-0002',
-          tier: 'ROAR Vàng',
+          tier: 'ROAR Gold',
           emailVerified: true,
           createdAt: '2026-01-15 09:00:00',
         };
@@ -470,6 +504,7 @@ export async function handleStaticApiFallback(
     if (!found) {
       return jsonResponse({ error: 'Sai email hoặc mật khẩu.' }, 401);
     }
+    if (syncStaticUserTier(state, found)) writeState(state);
     return jsonResponse({ ok: true, user: toPublicUser(found), token: `static-token-${found.id}` });
   }
 
@@ -600,6 +635,7 @@ export async function handleStaticApiFallback(
   // 3. Auth: Me & Logout
   if (pathname === '/api/auth/me' && method === 'GET') {
     const u = resolveTokenUser(headers, state);
+    if (u && syncStaticUserTier(state, u)) writeState(state);
     return jsonResponse({ user: u ? toPublicUser(u) : null });
   }
   if (pathname === '/api/auth/logout' && method === 'POST') {
@@ -610,9 +646,20 @@ export async function handleStaticApiFallback(
   if (pathname === '/api/account/dashboard' && method === 'GET') {
     const u = resolveTokenUser(headers, state);
     if (!u) return jsonResponse({ error: 'Unauthorized' }, 401);
+    if (syncStaticUserTier(state, u)) writeState(state);
     const userOrders = state.orders.filter(
       (o) => o.user_id === u.id || String(o.customer_email || '').toLowerCase() === u.email.toLowerCase()
     );
+    const snapTiers = Array.isArray(snap?.tables?.membership_tiers) && snap.tables.membership_tiers.length > 0
+      ? snap.tables.membership_tiers
+      : ROAR_MEMBERSHIP_TIERS.map((t, idx) => ({
+          id: idx + 1,
+          name: t.name,
+          min_spend_vnd: t.minSpendVnd,
+          point_multiplier: t.multiplier,
+          benefits_vi: t.benefitsVi.join(' · '),
+          benefits_en: t.benefitsEn.join(' · '),
+        }));
     return jsonResponse({
       user: {
         id: u.id,
@@ -621,7 +668,7 @@ export async function handleStaticApiFallback(
         phone: u.phone,
         role: u.role,
         member_code: u.memberCode,
-        tier: u.tier,
+        tier: normalizeMembershipTierName(u.tier),
         email_verified: 1,
         addresses: [],
       },
@@ -636,7 +683,7 @@ export async function handleStaticApiFallback(
             : d
         ),
       activeVouchers: (snap?.tables?.promotions || []).filter((p: any) => p.active),
-      tiers: snap?.tables?.membership_tiers || [],
+      tiers: snapTiers,
       loyaltySettings: (snap?.tables?.loyalty_settings || [])[0] || null,
       notifications: [],
     });
@@ -1236,10 +1283,13 @@ export async function handleStaticApiFallback(
 
       if (order.user_id && nextStatus === 'Completed' && !order.points_awarded) {
         const netEligible = Math.max(0, Number(order.subtotal || 0) - Number(order.discount_amount || 0) - Number(order.points_discount || 0));
-        const pts = Math.floor(netEligible / 10000);
-        if (pts > 0) {
-          const buyer = state.users.find((usr) => usr.id === Number(order.user_id));
-          if (buyer) buyer.points = (buyer.points ?? 0) + pts;
+        const buyer = state.users.find((usr) => usr.id === Number(order.user_id));
+        const buyerTier = buyer ? normalizeMembershipTierName(buyer.tier) : 'ROAR Member';
+        const tierMult = ROAR_MEMBERSHIP_TIERS.find((t) => t.name === buyerTier)?.multiplier || 1;
+        const pts = Math.floor((netEligible / 10000) * tierMult);
+        if (buyer) {
+          if (pts > 0) buyer.points = (buyer.points ?? 0) + pts;
+          syncStaticUserTier(state, buyer);
         }
         order.points_awarded = pts;
       }
@@ -1255,6 +1305,11 @@ export async function handleStaticApiFallback(
     }
     if (pathname === '/api/admin/customers' && method === 'GET') {
       syncStaticOrderCustomers(state);
+      let anyTierChanged = false;
+      for (const usr of state.users) {
+        if (syncStaticUserTier(state, usr)) anyTierChanged = true;
+      }
+      if (anyTierChanged) writeState(state);
       const sortedUsers = [...state.users].sort((a, b) => b.id - a.id);
       return jsonResponse({
         customers: sortedUsers.map((x) => {
@@ -1273,8 +1328,9 @@ export async function handleStaticApiFallback(
             full_name: x.fullName,
             phone: x.phone || '',
             role: x.role,
+            admin_role: x.adminRole || (x.role === 'admin' ? 'super_admin' : 'none'),
             member_code: x.memberCode,
-            tier: x.tier,
+            tier: normalizeMembershipTierName(x.tier),
             company_name: x.companyName || '',
             b2b_verified: Boolean(x.b2bVerified),
             wallet_balance_vnd: x.walletBalance ?? 0,
@@ -1300,9 +1356,12 @@ export async function handleStaticApiFallback(
       const id = Number(pathname.split('/').pop());
       const target = state.users.find((x) => x.id === id);
       if (!target) return jsonResponse({ error: 'Không tìm thấy thành viên.' }, 404);
-      if (body.tier) target.tier = String(body.tier);
+      if (body.tier) target.tier = normalizeMembershipTierName(String(body.tier));
       if (Number.isFinite(Number(body.pointsDelta)) && Number(body.pointsDelta) !== 0) {
         target.points = Math.max(0, (target.points ?? 0) + Number(body.pointsDelta));
+        if (Number(body.pointsDelta) > 0) {
+          syncStaticUserTier(state, target);
+        }
       }
       writeState(state);
       return jsonResponse({ ok: true });
@@ -1488,10 +1547,18 @@ export async function handleStaticApiFallback(
       const existing = existingById || existingByEmail;
 
       if (existing) {
+        const rawPromotePassword =
+          body.password !== undefined && body.password !== null ? String(body.password) : '';
+        if (rawPromotePassword.length > 0 && rawPromotePassword.length < 8) {
+          return jsonResponse({ error: 'Mật khẩu mới phải có tối thiểu 8 ký tự.' }, 400);
+        }
         existing.role = 'admin';
         existing.adminRole = adminRole;
         existing.adminPermissions = permissions;
         existing.emailVerified = true;
+        if (rawPromotePassword.length >= 8) {
+          existing.password = rawPromotePassword;
+        }
         writeState(state);
         return jsonResponse({ ok: true, id: existing.id, promoted: true });
       }
@@ -1561,8 +1628,40 @@ export async function handleStaticApiFallback(
       writeState(state);
       return jsonResponse({ ok: true });
     }
+    if (/^\/api\/admin\/users\/\d+\/reset-password$/.test(pathname) && method === 'POST') {
+      const id = Number(pathname.split('/')[4]);
+      const newPassword = String(body.newPassword || '');
+      if (newPassword.length < 8) {
+        return jsonResponse({ error: 'Mật khẩu mới phải có tối thiểu 8 ký tự.' }, 400);
+      }
+      const target = state.users.find((x) => x.id === id);
+      if (!target) return jsonResponse({ error: 'Không tìm thấy tài khoản.' }, 404);
+
+      const actorRole = u.adminRole || 'super_admin';
+      const isActorSuper = actorRole === 'super_admin';
+      const actorPerms = isActorSuper ? [...ALL_ADMIN_PERMISSIONS] : (u.adminPermissions || []);
+      if (target.role === 'admin') {
+        if (!isActorSuper && !actorPerms.includes('team')) {
+          return jsonResponse({ error: 'Bạn cần quyền Phân quyền Thành viên (team) để đặt lại mật khẩu Quản trị viên.' }, 403);
+        }
+        if ((target.adminRole || 'super_admin') === 'super_admin' && !isActorSuper) {
+          return jsonResponse({ error: 'Chỉ Super Admin mới được phép đặt lại mật khẩu của tài khoản Super Admin.' }, 403);
+        }
+      } else if (!isActorSuper && !actorPerms.includes('customers') && !actorPerms.includes('team')) {
+        return jsonResponse({ error: 'Bạn chưa được cấp quyền Khách hàng hoặc Phân quyền Thành viên để đặt lại mật khẩu.' }, 403);
+      }
+
+      target.password = newPassword;
+      writeState(state);
+      return jsonResponse({ ok: true });
+    }
     if (pathname === '/api/admin/wallets' && method === 'GET') {
       syncStaticOrderCustomers(state);
+      let walletTierChanged = false;
+      for (const usr of state.users) {
+        if (syncStaticUserTier(state, usr)) walletTierChanged = true;
+      }
+      if (walletTierChanged) writeState(state);
       const members = [...state.users]
         .sort((a, b) => b.id - a.id)
         .map((usr) => ({
@@ -1570,7 +1669,7 @@ export async function handleStaticApiFallback(
           email: usr.email,
           full_name: usr.fullName,
           member_code: usr.memberCode,
-          tier: usr.tier,
+          tier: normalizeMembershipTierName(usr.tier),
           wallet_balance_vnd: usr.walletBalance ?? 0,
           wallet_balance: usr.walletBalance ?? 0,
           points: { available: usr.points ?? 50, pending: 0, redeemed: 0 },
@@ -1602,6 +1701,7 @@ export async function handleStaticApiFallback(
       const finalPoints = pointsDelta + autoPoints;
       target.walletBalance = Math.max(0, (target.walletBalance ?? 0) + totalCredit);
       target.points = Math.max(0, (target.points ?? 0) + finalPoints);
+      syncStaticUserTier(state, target);
       if (totalCredit !== 0) {
         state.walletTransactions.unshift({
           id: Date.now(),
@@ -1654,6 +1754,7 @@ export async function handleStaticApiFallback(
         if (target) {
           target.walletBalance = (target.walletBalance ?? 0) + Number(reqItem.total_credit_vnd || 0);
           target.points = (target.points ?? 0) + Number(reqItem.points_delta || 0);
+          syncStaticUserTier(state, target);
           state.walletTransactions.unshift({
             id: Date.now(),
             user_id: target.id,
@@ -1734,6 +1835,7 @@ export async function handleStaticApiFallback(
 
     me.walletBalance = (me.walletBalance ?? 0) + totalCredit;
     me.points = (me.points ?? 0) + bonusPoints;
+    syncStaticUserTier(state, me);
     const tx = {
       id: Date.now(),
       user_id: me.id,
@@ -1813,6 +1915,7 @@ export async function handleStaticApiFallback(
     });
     state.checkins[me.id] = rec;
     me.points = (me.points ?? 0) + reward.points;
+    syncStaticUserTier(state, me);
     writeState(state);
     return jsonResponse({
       ok: true,

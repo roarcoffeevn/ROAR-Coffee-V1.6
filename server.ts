@@ -41,6 +41,10 @@ import {
   normalizeVolumeTiers,
   resolveVolumeTier,
 } from './src/lib/pricing.ts';
+import {
+  normalizeMembershipTierName,
+  resolveEffectiveMembershipTier,
+} from './src/lib/membershipTiers.ts';
 
 initDatabase();
 
@@ -118,6 +122,28 @@ function getPointsSummary(userId: number) {
     expired,
     expiringSoon: Math.min(Math.max(0, available), expiringSoon),
   };
+}
+
+function syncUserTierInDb(userId: number): string {
+  const row = db
+    .prepare('SELECT id, email, phone, tier FROM users WHERE id = ?')
+    .get(userId) as { id: number; email: string; phone: string; tier: string } | undefined;
+  if (!row) return 'ROAR Member';
+  const pts = getPointsSummary(userId);
+  const stats = db
+    .prepare(
+      "SELECT COALESCE(SUM(total), 0) as spent FROM orders WHERE (user_id = ? OR LOWER(TRIM(customer_email)) = LOWER(TRIM(?))) AND order_status != 'Cancelled'"
+    )
+    .get(userId, row.email || '') as { spent: number };
+  const effective = resolveEffectiveMembershipTier({
+    currentTierName: row.tier,
+    lifetimeSpendVnd: Number(stats?.spent || 0),
+    lifetimePoints: pts.available + pts.redeemed,
+  }).tier.name;
+  if (effective !== row.tier) {
+    db.prepare('UPDATE users SET tier = ? WHERE id = ?').run(effective, userId);
+  }
+  return effective;
 }
 
 function createUserNotification(
@@ -324,6 +350,7 @@ app.post('/api/auth/login', (req, res) => {
     return;
   }
 
+  const syncedTier = syncUserTierInDb(user.id);
   const token = signSessionToken({ userId: user.id, email: user.email, role: user.role });
   setSessionCookie(req, res, token);
   const rbac = resolveEffectiveAdminPermissions(user);
@@ -339,7 +366,7 @@ app.post('/api/auth/login', (req, res) => {
       adminRole: rbac.adminRole,
       adminPermissions: rbac.adminPermissions,
       memberCode: user.member_code,
-      tier: user.tier,
+      tier: syncedTier,
       emailVerified: Boolean(user.email_verified),
       companyName: user.company_name,
       b2bVerified: Boolean(user.b2b_verified),
@@ -388,6 +415,7 @@ app.post('/api/auth/social', (req, res) => {
     user = db.prepare('SELECT * FROM users WHERE id = ?').get(newId) as any;
   }
 
+  const syncedTier = syncUserTierInDb(user.id);
   const token = signSessionToken({ userId: user.id, email: user.email, role: user.role });
   setSessionCookie(req, res, token);
   const rbac = resolveEffectiveAdminPermissions(user);
@@ -404,7 +432,7 @@ app.post('/api/auth/social', (req, res) => {
       adminRole: rbac.adminRole,
       adminPermissions: rbac.adminPermissions,
       memberCode: user.member_code,
-      tier: user.tier,
+      tier: syncedTier,
       emailVerified: Boolean(user.email_verified),
       companyName: user.company_name,
       b2bVerified: Boolean(user.b2b_verified),
@@ -695,6 +723,7 @@ app.get('/api/auth/me', (req: AuthedRequest, res) => {
     res.json({ user: null });
     return;
   }
+  const syncedTier = syncUserTierInDb(user.id);
   const points = getPointsSummary(user.id);
   const unreadNotifications = (
     db.prepare('SELECT COUNT(*) as c FROM user_notifications WHERE user_id = ? AND is_read = 0').get(user.id) as { c: number }
@@ -710,7 +739,7 @@ app.get('/api/auth/me', (req: AuthedRequest, res) => {
       adminRole: rbac.adminRole,
       adminPermissions: rbac.adminPermissions,
       memberCode: user.member_code,
-      tier: user.tier,
+      tier: syncedTier,
       emailVerified: Boolean(user.email_verified),
       addresses: JSON.parse(user.addresses_json || '[]'),
       notificationPrefs: JSON.parse(user.notification_prefs_json || '{}'),
@@ -745,6 +774,7 @@ app.get('/api/wallet', requireAuth, (req: AuthedRequest, res) => {
     res.status(404).json({ error: 'User not found' });
     return;
   }
+  const syncedTier = syncUserTierInDb(user.id);
   const points = getPointsSummary(user.id);
   const transactions = db
     .prepare('SELECT * FROM wallet_transactions WHERE user_id = ? ORDER BY id DESC LIMIT 30')
@@ -752,7 +782,7 @@ app.get('/api/wallet', requireAuth, (req: AuthedRequest, res) => {
   res.json({
     walletBalanceVnd: Number(user.wallet_balance_vnd || 0),
     points,
-    tier: user.tier,
+    tier: syncedTier,
     memberCode: user.member_code,
     packages: WALLET_TOPUP_PACKAGES.map((p) => {
       const bonusVnd = Math.round((p.amountVnd * p.bonusPct) / 100);
@@ -867,6 +897,7 @@ app.post('/api/wallet/topup', requireAuth, (req: AuthedRequest, res) => {
     });
   })();
 
+  syncUserTierInDb(req.authUser!.userId);
   const updatedUser = db.prepare('SELECT wallet_balance_vnd FROM users WHERE id = ?').get(req.authUser!.userId) as any;
   res.json({
     ok: true,
@@ -972,6 +1003,7 @@ app.post('/api/admin/wallet/requests/:id/approve', requirePermission('customers'
     });
   })();
 
+  syncUserTierInDb(row.user_id);
   res.json({ ok: true });
 });
 
@@ -1086,6 +1118,7 @@ app.post('/api/checkin', requireAuth, (req: AuthedRequest, res) => {
     `Daily Check-in Day ${newStreak}${rule.bonusEn ? ` · ${rule.bonusEn}` : ''}`
   );
 
+  syncUserTierInDb(userId);
   res.json({
     ok: true,
     checkinDate: today,
@@ -1108,6 +1141,7 @@ app.get('/api/admin/wallets', requirePermission('customers', 'promotions', 'orde
 
   const enriched = members.map((m) => ({
     ...m,
+    tier: syncUserTierInDb(m.id),
     points: getPointsSummary(m.id),
   }));
 
@@ -1192,6 +1226,7 @@ app.post('/api/admin/wallets/adjust', requirePermission('customers', 'promotions
     note,
   });
 
+  syncUserTierInDb(userId);
   const updated = db.prepare('SELECT wallet_balance_vnd FROM users WHERE id = ?').get(userId) as any;
   res.json({
     ok: true,
@@ -1246,6 +1281,7 @@ app.post('/api/account/request-deletion', requireAuth, (req: AuthedRequest, res)
 
 app.get('/api/account/dashboard', requireAuth, (req: AuthedRequest, res) => {
   const userId = req.authUser!.userId;
+  const syncedTier = syncUserTierInDb(userId);
   const user = db.prepare('SELECT id, email, full_name, phone, role, member_code, tier, email_verified, addresses_json, notification_prefs_json, privacy_prefs_json, deletion_requested FROM users WHERE id = ?').get(userId) as any;
   const points = getPointsSummary(userId);
   const ledger = db
@@ -1281,6 +1317,7 @@ app.get('/api/account/dashboard', requireAuth, (req: AuthedRequest, res) => {
   res.json({
     user: {
       ...user,
+      tier: syncedTier,
       addresses: JSON.parse(user.addresses_json || '[]'),
       notificationPrefs: JSON.parse(user.notification_prefs_json || '{}'),
       privacyPrefs: JSON.parse(user.privacy_prefs_json || '{}'),
@@ -2017,7 +2054,8 @@ app.post('/api/orders', (req: AuthedRequest, res) => {
     }
 
     const loyalty = db.prepare('SELECT * FROM loyalty_settings WHERE id = 1').get() as any;
-    const tierRow = db.prepare('SELECT point_multiplier FROM membership_tiers WHERE name = ?').get(customerRecord.tier || 'ROAR Member') as { point_multiplier: number } | undefined;
+    const syncedCustomerTier = syncUserTierInDb(effectiveUserId);
+    const tierRow = db.prepare('SELECT point_multiplier FROM membership_tiers WHERE name = ?').get(syncedCustomerTier) as { point_multiplier: number } | undefined;
     const mult = tierRow?.point_multiplier || 1.0;
     const netEligible = Math.max(0, subtotal - discountAmount - pointsDiscount);
     const pendingPoints = Math.floor((netEligible / 10000) * (loyalty?.points_per_10k_vnd || 1) * mult);
@@ -3142,8 +3180,8 @@ app.patch('/api/admin/orders/:id', requirePermission('orders'), (req: AuthedRequ
     // Server-side loyalty points settlement: credit on Completed (prevent duplicate credits!), reverse on Cancelled/Returned
     if (order.user_id && nextStatus === 'Completed' && !order.points_awarded) {
       const loyalty = db.prepare('SELECT * FROM loyalty_settings WHERE id = 1').get() as any;
-      const user = db.prepare('SELECT tier FROM users WHERE id = ?').get(order.user_id) as { tier: string };
-      const tier = db.prepare('SELECT point_multiplier FROM membership_tiers WHERE name = ?').get(user?.tier || 'ROAR Member') as { point_multiplier: number } | undefined;
+      const syncedBuyerTier = syncUserTierInDb(order.user_id);
+      const tier = db.prepare('SELECT point_multiplier FROM membership_tiers WHERE name = ?').get(syncedBuyerTier) as { point_multiplier: number } | undefined;
       const netEligible = Math.max(0, order.subtotal - order.discount_amount - order.points_discount);
       const pts = Math.floor((netEligible / 10000) * (loyalty?.points_per_10k_vnd || 1) * (tier?.point_multiplier || 1));
 
@@ -3248,6 +3286,9 @@ app.patch('/api/admin/orders/:id', requirePermission('orders'), (req: AuthedRequ
   });
 
   updateTx();
+  if (order.user_id) {
+    syncUserTierInDb(order.user_id);
+  }
   logAudit(req.authUser!.userId, req.authUser!.email, 'UPDATE_ORDER', 'order', id, {
     orderStatus,
     paymentStatus,
@@ -3260,9 +3301,10 @@ app.patch('/api/admin/orders/:id', requirePermission('orders'), (req: AuthedRequ
 app.get('/api/admin/customers', requirePermission('customers'), (_req, res) => {
   syncUnlinkedOrderCustomers();
   const users = db
-    .prepare('SELECT id, email, full_name, phone, role, member_code, tier, wallet_balance_vnd, email_verified, company_name, b2b_verified, deletion_requested, created_at FROM users ORDER BY id DESC')
+    .prepare('SELECT id, email, full_name, phone, role, admin_role, member_code, tier, wallet_balance_vnd, email_verified, company_name, b2b_verified, deletion_requested, created_at FROM users ORDER BY id DESC')
     .all() as any[];
   const enriched = users.map((u) => {
+    const syncedTier = syncUserTierInDb(u.id);
     const orderStats = db
       .prepare("SELECT COUNT(*) as c, COALESCE(SUM(total), 0) as spent FROM orders WHERE (user_id = ? OR LOWER(TRIM(customer_email)) = LOWER(TRIM(?))) AND order_status != 'Cancelled'")
       .get(u.id, u.email || '') as { c: number; spent: number };
@@ -3271,6 +3313,7 @@ app.get('/api/admin/customers', requirePermission('customers'), (_req, res) => {
     ).c;
     return {
       ...u,
+      tier: syncedTier,
       points: getPointsSummary(u.id),
       orderCount: orderStats.c,
       totalSpent: orderStats.spent,
@@ -3290,7 +3333,8 @@ app.patch('/api/admin/customers/:id', requirePermission('customers'), (req: Auth
     res.status(404).json({ error: 'User not found' });
     return;
   }
-  if (tier) db.prepare('UPDATE users SET tier = ? WHERE id = ?').run(tier, id);
+  const normalizedTier = tier ? normalizeMembershipTierName(String(tier)) : null;
+  if (normalizedTier) db.prepare('UPDATE users SET tier = ? WHERE id = ?').run(normalizedTier, id);
   if (b2bVerified !== undefined) db.prepare('UPDATE users SET b2b_verified = ? WHERE id = ?').run(b2bVerified ? 1 : 0, id);
   if (pointsDelta && Number(pointsDelta) !== 0) {
     const delta = Math.trunc(Number(pointsDelta));
@@ -3306,8 +3350,11 @@ app.patch('/api/admin/customers/:id', requirePermission('customers'), (req: Auth
       category: 'loyalty',
       linkUrl: '/account?tab=rewards',
     });
+    if (delta > 0) {
+      syncUserTierInDb(id);
+    }
   }
-  logAudit(req.authUser!.userId, req.authUser!.email, 'UPDATE_CUSTOMER', 'user', id, { tier, pointsDelta });
+  logAudit(req.authUser!.userId, req.authUser!.email, 'UPDATE_CUSTOMER', 'user', id, { tier: normalizedTier || tier, pointsDelta });
   res.json({ ok: true });
 });
 
@@ -3815,14 +3862,43 @@ app.post('/api/admin/team', requirePermission('team'), (req: AuthedRequest, res)
 
   const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail) as any;
   if (existing) {
+    const actorRow = db
+      .prepare('SELECT id, email, role, admin_role, admin_permissions_json FROM users WHERE id = ?')
+      .get(req.authUser!.userId) as any;
+    const actorRbac = resolveEffectiveAdminPermissions(actorRow);
+    const targetRbac = resolveEffectiveAdminPermissions(existing);
+
+    if (existing.role === 'admin' && targetRbac.adminRole === 'super_admin' && actorRbac.adminRole !== 'super_admin') {
+      res.status(403).json({ error: 'Chỉ Super Admin mới có thể chỉnh sửa tài khoản Super Admin.' });
+      return;
+    }
+    if (validRole === 'super_admin' && actorRbac.adminRole !== 'super_admin') {
+      res.status(403).json({ error: 'Chỉ Super Admin mới có thể cấp quyền Super Admin.' });
+      return;
+    }
+
+    const rawPromotePassword = password !== undefined && password !== null ? String(password) : '';
+    if (rawPromotePassword.length > 0 && rawPromotePassword.length < 8) {
+      res.status(400).json({ error: 'Mật khẩu mới phải có tối thiểu 8 ký tự.' });
+      return;
+    }
+
     db.prepare(`
       UPDATE users SET role = 'admin', admin_role = ?, admin_permissions_json = ?, email_verified = 1 WHERE id = ?
     `).run(validRole, JSON.stringify(resolvedPerms), existing.id);
+
+    if (rawPromotePassword.length >= 8) {
+      db.prepare('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?').run(
+        hashPassword(rawPromotePassword),
+        existing.id
+      );
+    }
 
     logAudit(req.authUser!.userId, req.authUser!.email, 'PROMOTE_ADMIN_MEMBER', 'user', existing.id, {
       email: normalizedEmail,
       adminRole: validRole,
       permissions: resolvedPerms,
+      passwordSet: rawPromotePassword.length >= 8,
     });
     res.status(200).json({ ok: true, id: existing.id, promoted: true });
     return;
@@ -3926,6 +4002,80 @@ app.patch('/api/admin/team/:id', requirePermission('team'), (req: AuthedRequest,
     adminRole: nextRole,
     permissions: nextPerms,
   });
+  res.json({ ok: true });
+});
+
+app.post('/api/admin/users/:id/reset-password', requireAdmin, (req: AuthedRequest, res) => {
+  const id = Number(req.params.id);
+  const newPassword = String(req.body?.newPassword || '');
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: 'ID tài khoản không hợp lệ.' });
+    return;
+  }
+  if (newPassword.length < 8) {
+    res.status(400).json({ error: 'Mật khẩu mới phải có tối thiểu 8 ký tự.' });
+    return;
+  }
+
+  const actorRow = db
+    .prepare('SELECT id, email, role, admin_role, admin_permissions_json FROM users WHERE id = ?')
+    .get(req.authUser!.userId) as any;
+  if (!actorRow || actorRow.role !== 'admin') {
+    res.status(403).json({ error: 'Forbidden: Administrator role required' });
+    return;
+  }
+
+  const target = db
+    .prepare('SELECT id, email, full_name, role, admin_role, admin_permissions_json FROM users WHERE id = ?')
+    .get(id) as any;
+  if (!target) {
+    res.status(404).json({ error: 'Không tìm thấy tài khoản.' });
+    return;
+  }
+
+  const actorRbac = resolveEffectiveAdminPermissions(actorRow);
+  const isActorSuper = actorRbac.adminRole === 'super_admin';
+
+  if (target.role === 'admin') {
+    if (!isActorSuper && !actorRbac.adminPermissions.includes('team')) {
+      res.status(403).json({ error: 'Bạn cần quyền Phân quyền Thành viên (team) để đặt lại mật khẩu Quản trị viên.' });
+      return;
+    }
+    const targetRbac = resolveEffectiveAdminPermissions(target);
+    if (targetRbac.adminRole === 'super_admin' && !isActorSuper) {
+      res.status(403).json({ error: 'Chỉ Super Admin mới được phép đặt lại mật khẩu của tài khoản Super Admin.' });
+      return;
+    }
+  } else {
+    const canManageCustomers =
+      isActorSuper ||
+      actorRbac.adminPermissions.includes('customers') ||
+      actorRbac.adminPermissions.includes('team');
+    if (!canManageCustomers) {
+      res.status(403).json({ error: 'Bạn chưa được cấp quyền Khách hàng hoặc Phân quyền Thành viên để đặt lại mật khẩu.' });
+      return;
+    }
+  }
+
+  db.prepare('UPDATE users SET password_hash = ?, reset_token = NULL, reset_expires = NULL WHERE id = ?').run(
+    hashPassword(newPassword),
+    id
+  );
+
+  logAudit(req.authUser!.userId, req.authUser!.email, 'ADMIN_RESET_PASSWORD', 'user', id, {
+    targetEmail: target.email,
+    targetRole: target.role,
+  });
+
+  createUserNotification(id, {
+    titleVi: 'Mật khẩu tài khoản vừa được Quản trị viên đặt lại',
+    titleEn: 'Your account password was reset by an administrator',
+    messageVi: 'Quản trị viên ROAR COFFEE vừa đặt lại mật khẩu đăng nhập cho tài khoản của bạn. Vui lòng đổi lại mật khẩu cá nhân sau khi đăng nhập nếu cần.',
+    messageEn: 'A ROAR COFFEE administrator reset your sign-in password. You may change it from your Account settings after signing in.',
+    category: 'system',
+    linkUrl: '/account',
+  });
+
   res.json({ ok: true });
 });
 

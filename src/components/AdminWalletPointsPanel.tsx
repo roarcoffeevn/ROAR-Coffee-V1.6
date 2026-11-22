@@ -2,9 +2,10 @@ import React, { useEffect, useState } from 'react';
 import { CheckCircle2, Clock, Coins, PlusCircle, RefreshCw, Wallet, XCircle } from 'lucide-react';
 import { useI18n } from '../i18n/I18nContext';
 import { useStore } from '../context/StoreContext';
+import { getTierDisplayName } from '../lib/membershipTiers';
 
 export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = ({ onGoProducts }) => {
-  const { t } = useI18n();
+  const { lang, t } = useI18n();
   const { apiFetch, showToast, refreshUser } = useStore();
   const [members, setMembers] = useState<any[]>([]);
   const [transactions, setTransactions] = useState<any[]>([]);
@@ -378,7 +379,7 @@ export const AdminWalletPointsPanel: React.FC<{ onGoProducts?: () => void }> = (
               <div key={m.id} className="px-3.5 py-2 flex items-center justify-between gap-2">
                 <div className="min-w-0">
                   <p className="font-semibold text-slate-900 truncate">{m.full_name} <span className="font-mono text-[10px] text-slate-400">({m.member_code})</span></p>
-                  <p className="text-[11px] text-slate-500 truncate">{m.email} · {m.tier}</p>
+                  <p className="text-[11px] text-slate-500 truncate">{m.email} · {getTierDisplayName(m.tier, lang)}</p>
                 </div>
                 <div className="text-right font-mono shrink-0">
                   <p className="font-bold text-[#00552B]">{Number(m.wallet_balance_vnd || 0).toLocaleString('vi-VN')}₫</p>

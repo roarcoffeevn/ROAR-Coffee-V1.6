@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { BookOpen, Clock, Thermometer } from 'lucide-react';
+import { AboutBrandContent } from '../components/AboutBrandContent';
 import { AdaptiveLogo } from '../components/AdaptiveLogo';
 import { AdminPageEditLink } from '../components/AdminPageEditBar';
 import { B2BInquiryModal } from '../components/B2BInquiryModal';
@@ -426,87 +427,7 @@ export const BrewingGuidePage: React.FC = () => {
 };
 
 export const AboutPage: React.FC = () => {
-  const { lang, t, localePath } = useI18n();
-  const { theme, cmsPages } = useStore();
-  const page = cmsPages['about'];
-
-  const fallbackCards = [
-    {
-      title_vi: 'Triết lý Nguồn gốc Minh bạch',
-      title_en: 'Transparent Origin Philosophy',
-      body_vi: 'Phân tách rõ ràng thông tin địa lý vùng cà phê Việt Nam với từng lô nguyên liệu được kiểm định chứng thư COA trước khi công bố.',
-      body_en: 'We clearly distinguish general Vietnamese coffee geography from verified sourcing lots and laboratory COA documentation.',
-    },
-    {
-      title_vi: 'Chuẩn mực Nhân xanh & Rang xay',
-      title_en: 'Green & Roast Discipline',
-      body_vi: 'Từ cấu hình 27 tổ hợp nhân xanh S14/S16/S18 (Natural, Honey, CBU) đến Robusta House Blend, Arabica Selection và Signature Reserve.',
-      body_en: 'From our 27-variant S14/S16/S18 green bean matrix (Natural, Honey, CBU) to Robusta House Blend, Arabica Selection, and Signature Reserve.',
-    },
-    {
-      title_vi: 'Khát vọng Vươn tầm Quốc tế',
-      title_en: 'International Ambition',
-      body_vi: 'Sẵn sàng đáp ứng tiêu chuẩn hợp tác B2B, HORECA, OEM / Private Label và xuất khẩu trên nền tảng thương mại số minh bạch.',
-      body_en: 'Engineered to serve domestic HORECA, wholesale partners, private-label OEM clients, and international green coffee buyers.',
-    },
-  ];
-
-  const cards = page?.sections?.length ? page.sections : fallbackCards;
-  const eyebrow =
-    (lang === 'vi' ? page?.eyebrow_vi : page?.eyebrow_en) ||
-    (lang === 'vi' ? 'KHƠI BẢN LĨNH. ĐẬM CHẤT RIÊNG.' : 'IGNITING COURAGE. DEFINING CHARACTER.');
-  const title =
-    (lang === 'vi' ? page?.title_vi : page?.title_en) ||
-    t('Về Thương Hiệu ROAR COFFEE', 'About ROAR COFFEE');
-  const body =
-    (lang === 'vi' ? page?.body_vi : page?.body_en) ||
-    t(
-      'ROAR COFFEE là thương hiệu cà phê Việt Nam được xây dựng với tầm nhìn phát triển song hành thị trường nội địa và quốc tế. Chúng tôi kết nối di sản vùng trồng cà phê Việt Nam, kỷ luật tuyển chọn nhân xanh, tay nghề rang xay và 7 cá tính thương hiệu đương đại.',
-      'ROAR COFFEE is a Vietnamese coffee brand built for both domestic resonance and international growth — uniting authentic Vietnamese coffee heritage, disciplined green bean grading, modern roast craft, and seven distinctive brand personalities.'
-    );
-
-  return (
-    <div className="max-w-[1100px] mx-auto px-6 py-14 space-y-12">
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-10 items-center">
-        <div className="lg:col-span-5 flex justify-center bg-white dark:bg-[#16221C] p-10 rounded-2xl border border-[#202020]/10 dark:border-white/10">
-          <AdaptiveLogo variant="vertical" surface={theme === 'dark' ? 'dark' : 'light'} size="lg" />
-        </div>
-        <div className="lg:col-span-7 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-[#00552B] dark:text-[#C6A667]">
-              {eyebrow}
-            </p>
-            <AdminPageEditLink slug="about" />
-          </div>
-          <h1 className="text-3xl sm:text-4xl font-bold text-[#202020] dark:text-[#F1EFEA]">
-            {title}
-          </h1>
-          <p className="text-base text-[#202020]/80 dark:text-[#F1EFEA]/80 leading-relaxed whitespace-pre-line">
-            {body}
-          </p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-        {cards.map((card, idx) => (
-          <div key={`${card.title_en}-${idx}`} className="bg-white dark:bg-[#16221C] rounded-xl border border-[#202020]/10 dark:border-white/10 p-6 space-y-2.5">
-            <h2 className="text-lg font-bold text-[#00552B] dark:text-[#C6A667]">{lang === 'vi' ? card.title_vi : card.title_en}</h2>
-            <p className="text-sm text-[#202020]/75 dark:text-[#F1EFEA]/75 leading-relaxed">{lang === 'vi' ? card.body_vi : card.body_en}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="bg-[#003D25] text-white rounded-2xl p-8 flex flex-col sm:flex-row items-center justify-between gap-6">
-        <div className="space-y-1">
-          <h3 className="text-xl font-bold">{t('Khám phá 7 Cá Tính Thương Hiệu', 'Discover the Seven Brand Personalities')}</h3>
-          <p className="text-sm text-[#F8F5EF]/75">{t('Hổ · Sư tử · Cáo · Đại bàng · Sói · Cú mèo · Báo đen', 'Tiger · Lion · Fox · Eagle · Wolf · Owl · Black Panther')}</p>
-        </div>
-        <Link to={localePath(page?.cta_url || '/personalities')} className="px-6 py-3 bg-[#C6A667] text-[#111111] text-sm font-semibold rounded whitespace-nowrap">
-          {(lang === 'vi' ? page?.cta_label_vi : page?.cta_label_en) || t('Xem bộ sưu tập 7 Cá Tính', 'Explore Seven Personalities')}
-        </Link>
-      </div>
-    </div>
-  );
+  return <AboutBrandContent />;
 };
 
 export const SignatureReservePage: React.FC = () => {

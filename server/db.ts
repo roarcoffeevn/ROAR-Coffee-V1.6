@@ -2526,6 +2526,12 @@ function runIncrementalMigrations(): void {
     );
   }
 
+  // Normalize any legacy localized tier names to canonical ROAR tier names
+  db.prepare("UPDATE users SET tier = 'ROAR Silver' WHERE LOWER(TRIM(tier)) IN ('roar bạc', 'roar bac', 'silver', 'hạng bạc')").run();
+  db.prepare("UPDATE users SET tier = 'ROAR Gold' WHERE LOWER(TRIM(tier)) IN ('roar vàng', 'roar vang', 'gold', 'hạng vàng')").run();
+  db.prepare("UPDATE users SET tier = 'ROAR Reserve' WHERE LOWER(TRIM(tier)) IN ('roar thượng hạng', 'roar thuong hang', 'reserve', 'platinum', 'bạch kim')").run();
+  db.prepare("UPDATE users SET tier = 'ROAR Member' WHERE tier IS NULL OR TRIM(tier) = '' OR LOWER(TRIM(tier)) IN ('bronze', 'hạng đồng', 'member', 'thành viên')").run();
+
   // 7. Seed editable subpages (cms_pages) idempotently
   const seedPages: Array<{
     slug: string;

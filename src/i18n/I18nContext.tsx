@@ -35,7 +35,8 @@ export const I18nProvider: React.FC<{ children: React.ReactNode }> = ({ children
       lang === 'vi'
         ? 'ROAR COFFEE® — Khơi Bản Lĩnh. Đậm Chất Riêng.'
         : 'ROAR COFFEE® — Igniting Courage. Defining Character.';
-    if (!location.pathname.includes('/product/') && !location.pathname.includes('/journal/')) {
+    const cleanPath = stripLocalePrefix(location.pathname);
+    if (!location.pathname.includes('/product/') && !location.pathname.includes('/journal/') && cleanPath !== '/about') {
       document.title = baseTitle;
     }
   }, [lang, location.pathname]);

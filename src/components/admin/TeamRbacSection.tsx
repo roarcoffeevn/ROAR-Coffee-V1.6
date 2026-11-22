@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Check,
   KeyRound,
+  LockKeyhole,
   Plus,
   ShieldCheck,
   Trash2,
@@ -19,6 +20,7 @@ import {
   type AdminPermission,
   type AdminRoleKey,
 } from '../../lib/rbac';
+import { ResetPasswordModal, type ResetPasswordTarget } from './ResetPasswordModal';
 
 export interface AdminTeamMember {
   id: number;
@@ -65,6 +67,7 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
   const [newPhone, setNewPhone] = useState('');
   const [newPassword, setNewPassword] = useState('');
   const [promoteEmail, setPromoteEmail] = useState(nonAdmins[0]?.email || '');
+  const [promotePassword, setPromotePassword] = useState('');
   const [newRole, setNewRole] = useState<AdminRoleKey>('content_editor');
   const [newPerms, setNewPerms] = useState<string[]>(getRolePreset('content_editor').permissions);
   const [submitting, setSubmitting] = useState(false);
@@ -74,6 +77,13 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
   const [editPerms, setEditPerms] = useState<string[]>([]);
   const [editName, setEditName] = useState('');
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [resetTarget, setResetTarget] = useState<ResetPasswordTarget | null>(null);
+
+  useEffect(() => {
+    if (!promoteEmail && nonAdmins.length > 0) {
+      setPromoteEmail(nonAdmins[0].email);
+    }
+  }, [nonAdmins, promoteEmail]);
 
   const handleRolePresetChange = (roleKey: AdminRoleKey, setterRole: (r: AdminRoleKey) => void, setterPerms: (p: string[]) => void) => {
     setterRole(roleKey);
@@ -90,14 +100,19 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
 
   const handleCreateOrPromote = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (mode === 'promote' && promotePassword.length > 0 && promotePassword.length < 8) {
+      showToast(t('Mật khẩu mới phải có tối thiểu 8 ký tự.', 'New password must be at least 8 characters.'));
+      return;
+    }
     setSubmitting(true);
     try {
       const payload =
         mode === 'promote'
           ? {
-              email: promoteEmail,
+              email: promoteEmail.trim(),
               adminRole: newRole,
               permissions: newPerms,
+              ...(promotePassword.length >= 8 ? { password: promotePassword } : {}),
             }
           : {
               email: newEmail.trim(),
@@ -125,6 +140,7 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
         setNewFullName('');
         setNewPhone('');
         setNewPassword('');
+        setPromotePassword('');
         await onRefresh();
       } else {
         showToast(d.error || t('Không thể thêm thành viên quản trị.', 'Failed to add staff member.'));
@@ -334,20 +350,44 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
               </div>
             </div>
           ) : (
-            <div className="max-w-md">
-              <label className="block font-semibold text-slate-700 mb-1">{t('Chọn tài khoản cần cấp quyền CMS', 'Select User Account to Promote')}</label>
-              <select
-                value={promoteEmail}
-                onChange={(e) => setPromoteEmail(e.target.value)}
-                required
-                className="w-full border border-slate-200 rounded-lg px-3 py-2 bg-white"
-              >
-                {nonAdmins.map((u) => (
-                  <option key={u.id} value={u.email}>
-                    {u.full_name} ({u.email}) — {u.role}
-                  </option>
-                ))}
-              </select>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-2xl">
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">{t('Chọn tài khoản cần cấp quyền CMS', 'Select User Account to Promote')}</label>
+                <select
+                  value={promoteEmail}
+                  onChange={(e) => setPromoteEmail(e.target.value)}
+                  required
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2 bg-white"
+                >
+                  {nonAdmins.length === 0 && (
+                    <option value="">{t('Chưa có tài khoản khách hàng khả dụng', 'No non-admin accounts available')}</option>
+                  )}
+                  {nonAdmins.map((u) => (
+                    <option key={u.id} value={u.email}>
+                      {u.full_name} ({u.email}) — {u.role}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  {t('Đặt mật khẩu đăng nhập mới (≥8 ký tự, tùy chọn)', 'Set New Login Password (≥8 chars, optional)')}
+                </label>
+                <input
+                  type="password"
+                  minLength={8}
+                  value={promotePassword}
+                  onChange={(e) => setPromotePassword(e.target.value)}
+                  placeholder={t('Để trống nếu giữ mật khẩu cũ...', 'Leave blank to keep existing password...')}
+                  className="w-full border border-slate-200 rounded-lg px-3 py-2"
+                />
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {t(
+                    'Khuyên nhập mật khẩu mới nếu tài khoản được tạo tự động từ đơn hàng hoặc đăng nhập nhanh.',
+                    'Recommended if this account was auto-created from checkout or social sign-in.'
+                  )}
+                </p>
+              </div>
             </div>
           )}
 
@@ -440,7 +480,7 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
                     </p>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex flex-wrap items-center gap-2 sm:gap-3">
                     <div className="text-right">
                       <span className="block font-semibold text-slate-800">{lang === 'vi' ? preset.labelVi : preset.labelEn}</span>
                       <span className="text-[11px] text-slate-500 font-mono tabular-nums">
@@ -449,6 +489,29 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
                           : `${(Array.isArray(m.adminPermissions) ? m.adminPermissions : []).length}/12 ${t('phân hệ', 'modules')}`}
                       </span>
                     </div>
+                    <button
+                      type="button"
+                      disabled={m.adminRole === 'super_admin' && user?.adminRole !== 'super_admin'}
+                      onClick={() =>
+                        setResetTarget({
+                          id: m.id,
+                          email: m.email,
+                          fullName: m.fullName,
+                          role: m.role,
+                          adminRole: m.adminRole,
+                          memberCode: m.memberCode,
+                        })
+                      }
+                      title={
+                        m.adminRole === 'super_admin' && user?.adminRole !== 'super_admin'
+                          ? t('Chỉ Super Admin mới có thể đặt lại mật khẩu của Super Admin', 'Only Super Admins can reset another Super Admin password')
+                          : t('Đặt lại mật khẩu đăng nhập CMS', 'Reset CMS login password')
+                      }
+                      className="px-3 py-1.5 rounded-lg border border-amber-200 bg-amber-50/70 hover:bg-amber-100 text-amber-800 font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                      <LockKeyhole className="w-3.5 h-3.5" />
+                      {t('Đặt lại mật khẩu', 'Reset Pass')}
+                    </button>
                     <button
                       type="button"
                       onClick={() => startEditingMember(m)}
@@ -587,6 +650,12 @@ export const TeamRbacSection: React.FC<TeamRbacSectionProps> = ({
           </table>
         </div>
       </div>
+
+      <ResetPasswordModal
+        target={resetTarget}
+        onClose={() => setResetTarget(null)}
+        onSuccess={onRefresh}
+      />
     </div>
   );
 };
